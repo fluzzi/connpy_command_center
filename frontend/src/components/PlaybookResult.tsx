@@ -1,0 +1,179 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Terminal as TerminalIcon, Cpu, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { api } from '../api';
+
+interface PlaybookResultProps {
+  playbookData: any;
+  onClose: () => void;
+}
+
+export const PlaybookResult: React.FC<PlaybookResultProps> = ({ playbookData, onClose }) => {
+  const [logs, setLogs] = useState<{type: string, data: string, node?: string, status?: number, result?: any}[]>([]);
+  const [isRunning, setIsRunning] = useState(true);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
+  }, [logs]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const ws = new WebSocket(api.getPlaybookWsUrl());
+    
+    ws.onopen = () => {
+      if (isMounted) {
+        ws.send(JSON.stringify({ playbook: playbookData }));
+        setLogs([{ type: 'header', data: 'INITIALIZING EXECUTION PIPELINE...' }]);
+      }
+    };
+    
+    ws.onmessage = (event) => {
+      if (!isMounted) return;
+      const msg = JSON.parse(event.data);
+      setLogs(prev => [...prev, msg]);
+      if (msg.type === 'header' && msg.data.includes('COMPLETED')) {
+          setIsRunning(false);
+      }
+    };
+    
+    ws.onerror = () => {
+      if (!isMounted) return;
+      setLogs(prev => [...prev, { type: 'error', data: 'WebSocket Connection Error: The execution link was interrupted.' }]);
+      setIsRunning(false);
+    };
+    
+    ws.onclose = () => {
+      if (isMounted) {
+          setIsRunning(false);
+          setLogs(prev => {
+              // Only add if not already marked as completed
+              const last = prev[prev.length - 1];
+              if (last && last.type === 'header' && last.data.includes('COMPLETED')) return prev;
+              return [...prev, { type: 'header', data: '--- EXECUTION LINK CLOSED ---' }];
+          });
+      }
+    };
+
+    return () => {
+      isMounted = false;
+      ws.close();
+    };
+  }, []); // Empty dependency array ensures this only runs exactly once on mount
+
+  return (
+    <div className="flex flex-col h-full bg-[#2e3440] text-[#d8dee9] font-mono selection:bg-[#81a1c1]/30">
+      {/* Terminal Header */}
+      <div className="bg-[#2e3440] px-6 py-4 flex justify-between items-center border-b border-[#3b4252] shrink-0 z-10 shadow-md">
+        <div className="flex items-center gap-4">
+          <div className={`p-2 rounded-lg ${isRunning ? 'bg-[#a3be8c]/10 text-[#a3be8c]' : 'bg-[#81a1c1]/10 text-[#81a1c1]'}`}>
+            {isRunning ? <Loader2 size={20} className="animate-spin" /> : <TerminalIcon size={20} />}
+          </div>
+          <div className="flex flex-col">
+            <h2 className="text-xs font-black uppercase tracking-[0.3em] text-[#eceff4]">
+                {isRunning ? 'Execution in Progress' : 'Execution Completed'}
+            </h2>
+            <p className="text-[10px] text-[#81a1c1] font-bold uppercase tracking-widest mt-0.5">
+                Playbook: {playbookData?.playbook || 'Untitled'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+            <div 
+                role="button"
+                tabIndex={0}
+                onClick={onClose}
+                className="appearance-none p-2 text-[#81a1c1] hover:text-[#eceff4] hover:bg-[#bf616a]/20 rounded-lg transition-all ml-4 active:scale-90 border border-transparent cursor-pointer outline-none bg-transparent"
+                title="Close Result"
+            >
+                <X size={20} />
+            </div>
+        </div>
+      </div>
+
+      {/* Terminal Body */}
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-8 custom-scrollbar scroll-smooth">
+        <div className="max-w-5xl mx-auto space-y-4">
+          {logs.map((log, i) => (
+            <div key={i} className={`mb-4 animate-in fade-in slide-in-from-left-2 duration-300 ${
+              log.type === 'header' ? 'mt-10 first:mt-0' : ''
+            }`}>
+              {log.type === 'header' ? (
+                <div className="flex items-center gap-6 mb-6">
+                    <div className="h-[1px] flex-1 bg-gradient-to-r from-transparent to-[#b48ead]/30" />
+                    <span className="text-[#b48ead] font-black uppercase tracking-[0.5em] text-[11px] py-2 px-6 bg-[#b48ead]/5 border border-[#b48ead]/20 rounded-full shadow-lg shadow-[#b48ead]/5">
+                        {log.data}
+                    </span>
+                    <div className="h-[1px] flex-1 bg-gradient-to-l from-transparent to-[#b48ead]/30" />
+                </div>
+              ) : log.type === 'error' ? (
+                <div className="bg-[#bf616a]/10 border-l-4 border-[#bf616a] p-4 my-4 text-[#bf616a] rounded-r-lg shadow-lg">
+                    <div className="flex items-center gap-3 mb-1">
+                        <AlertCircle size={16} />
+                        <span className="font-black uppercase tracking-widest text-[10px]">Critical Error</span>
+                    </div>
+                    <p className="text-sm">{log.data}</p>
+                </div>
+              ) : log.type === 'output' ? (
+                <div className="group flex flex-col gap-3 p-4 bg-[#3b4252]/30 hover:bg-[#3b4252]/50 rounded-xl transition-all border border-[#4c566a]/20 hover:border-[#81a1c1]/30 shadow-md">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-4">
+                        {log.node && (
+                            <div className="flex items-center gap-2 bg-[#2e3440] px-3 py-1 rounded-md border border-[#4c566a]/30">
+                                <Cpu size={12} className="text-[#81a1c1]" />
+                                <span className="text-[#81a1c1] font-black uppercase tracking-widest text-[11px]">{log.node}</span>
+                            </div>
+                        )}
+                    </div>
+                    <div className={`flex items-center gap-2 px-3 py-1 rounded-md text-[11px] font-black uppercase tracking-widest border ${
+                        log.status === 0 
+                        ? 'bg-[#a3be8c]/10 text-[#a3be8c] border-[#a3be8c]/30' 
+                        : 'bg-[#bf616a]/10 text-[#bf616a] border-[#bf616a]/30'
+                    }`}>
+                        {log.status === 0 ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                        {log.status === 0 ? 'Success' : `Failed (${log.status})`}
+                    </div>
+                  </div>
+                  
+                  <div className="mt-2 text-[#d8dee9] whitespace-pre-wrap break-all font-mono text-[14px] leading-relaxed bg-[#2e3440]/50 p-5 rounded-lg border border-[#4c566a]/20 shadow-inner">
+                    {log.data}
+                  </div>
+
+                  {log.result && Object.keys(log.result).length > 0 && (
+                    <div className="mt-4 flex flex-col gap-2">
+                      <div className="text-[10px] font-black text-[#81a1c1] uppercase tracking-[0.3em] mb-1 flex items-center gap-2">
+                        <div className="h-[1px] w-4 bg-[#81a1c1]/30" />
+                        Verification Pipeline
+                      </div>
+                      <div className="flex flex-col gap-1.5 pl-2">
+                        {Object.entries(log.result).map(([key, val]) => (
+                          <div key={key} className={`flex items-center justify-between text-[11px] font-mono px-4 py-2 rounded-md border bg-[#2e3440]/30 ${
+                              val 
+                              ? 'border-[#a3be8c]/20 text-[#a3be8c]' 
+                              : 'border-[#bf616a]/20 text-[#bf616a]'
+                          }`}>
+                            <div className="flex items-center gap-3">
+                                <span className={`w-1.5 h-1.5 rounded-full ${val ? 'bg-[#a3be8c] shadow-[0_0_5px_#a3be8c]' : 'bg-[#bf616a] shadow-[0_0_5px_#bf616a]'}`} />
+                                <span className="uppercase tracking-widest font-bold opacity-80">{key}</span>
+                            </div>
+                            <span className="font-black tracking-widest text-[10px] px-2 py-0.5 rounded bg-black/20">
+                                {val ? 'PASSED' : 'FAILED'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[#81a1c1]/40 italic pl-10 py-1 text-[10px] uppercase tracking-widest">{log.data}</div>
+              )}
+            </div>
+          ))}
+          <div className="h-20 shrink-0" />
+        </div>
+      </div>
+    </div>
+  );
+};
