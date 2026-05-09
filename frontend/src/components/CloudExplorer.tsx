@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Cloud, X, RefreshCw, Server, Network, Layers, Shield, Search, Activity, Eye, Zap, Wind, ChevronDown, Terminal as TerminalIcon, BarChart2 } from 'lucide-react';
+import { Cloud, X, RefreshCw, Server, Network, Layers, Shield, Search, Activity, Eye, Zap, Wind, ChevronDown, Terminal as TerminalIcon, BarChart2, Copy, Check } from 'lucide-react';
 import { api } from '../api';
 
 interface CloudExplorerProps {
@@ -84,6 +84,14 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
   const [activeTab, setActiveTab] = useState<keyof InventoryData>('instances');
   const [searchTerm, setSearchTerm] = useState('');
   const [directInspectId, setDirectInspectId] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopy = (e: React.MouseEvent, text: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text);
+    setCopiedId(text);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
   useEffect(() => {
     api.awsInfo()
@@ -430,16 +438,40 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
                     {filteredItems.map((item: CloudAsset, idx: number) => (
                       <tr key={idx} className="border-b border-[#3b4252]/30 hover:bg-[#3b4252]/20 transition-colors group">
                         <td className="py-4 px-4">
-                          <span className="text-sm font-bold text-[#eceff4]">{item.name}</span>
+                          <div className="flex items-center gap-2 group/name">
+                            {item.name && (
+                              <div 
+                                role="button"
+                                tabIndex={0}
+                                onClick={(e) => handleCopy(e, item.name!)}
+                                className={`p-1.5 rounded-lg hover:bg-[#d08770]/10 transition-all cursor-pointer outline-none opacity-0 group-hover/name:opacity-100 ${copiedId === item.name ? 'text-[#a3be8c] opacity-100' : 'text-[#81a1c1]/30 hover:text-[#d08770]'}`}
+                                title="Copy Name"
+                              >
+                                {copiedId === item.name ? <Check size={12} /> : <Copy size={12} />}
+                              </div>
+                            )}
+                            <span className="text-sm font-bold text-[#eceff4]">{item.name}</span>
+                          </div>
                         </td>
                         <td className="py-4 px-4">
-                          <div 
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => onOpenInspect(item.id, selectedProfile, selectedRegion)}
-                            className="text-xs font-mono text-[#d8dee9]/80 bg-[#3b4252]/30 px-3 py-1.5 rounded-lg border border-transparent hover:bg-[#d08770]/10 hover:text-[#d08770] transition-all flex items-center gap-2 shadow-sm outline-none cursor-pointer"
-                          >
-                            {item.id} <Eye size={10} className="opacity-0 group-hover:opacity-100" />
+                          <div className="flex items-center gap-2">
+                            <div 
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => handleCopy(e, item.id)}
+                              className={`p-1.5 rounded-lg hover:bg-[#d08770]/10 transition-all cursor-pointer outline-none ${copiedId === item.id ? 'text-[#a3be8c]' : 'text-[#81a1c1]/30 hover:text-[#d08770]'}`}
+                              title="Copy ID"
+                            >
+                              {copiedId === item.id ? <Check size={12} /> : <Copy size={12} />}
+                            </div>
+                            <div 
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => onOpenInspect(item.id, selectedProfile, selectedRegion)}
+                              className="text-xs font-mono text-[#d8dee9]/80 bg-[#3b4252]/30 px-3 py-1.5 rounded-lg border border-transparent hover:bg-[#d08770]/10 hover:text-[#d08770] transition-all flex items-center gap-2 shadow-sm outline-none cursor-pointer"
+                            >
+                              {item.id} <Eye size={10} className="opacity-0 group-hover:opacity-100" />
+                            </div>
                           </div>
                         </td>
                         <td className="py-4 px-4">
