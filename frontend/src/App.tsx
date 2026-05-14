@@ -19,6 +19,7 @@ function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showAiPanel, setShowAiPanel] = useState(true);
+  const [activeAiTab, setActiveAiTab] = useState<'global' | 'terminal'>('global');
 
   // Global AWS Context (shared with CloudExplorer)
   const [selectedProfile, setSelectedProfile] = useState('');
@@ -155,6 +156,12 @@ function App() {
     };
     updateTabsAndPush([...tabs, newTab]);
     setActiveTabId(tabId);
+  };
+
+  const handleCopilotRequest = (text: string, mode: string) => {
+    setShowAiPanel(true);
+    setActiveAiTab('terminal');
+    console.log(`Phase 2 Hook: AI Copilot Requested -> "${text}" (Mode: ${mode})`);
   };
 
   const handleConnpyLink = (url: string) => {
@@ -421,7 +428,12 @@ function App() {
                       onClose={() => closeTab(tab.id)}
                     />
                   ) : (
-                    <Terminal nodeId={tab.nodeId} isActive={activeTabId === tab.id} workspaceId={workspaceId} />
+                    <Terminal 
+                      nodeId={tab.nodeId} 
+                      isActive={activeTabId === tab.id} 
+                      workspaceId={workspaceId}
+                      onCopilotRequest={handleCopilotRequest}
+                    />
                   )}
                 </div>
               ))}
@@ -438,6 +450,8 @@ function App() {
               selectedProfile={selectedProfile}
               selectedRegion={selectedRegion}
               availableNodes={availableNodes}
+              activeTab={activeAiTab}
+              onTabChange={setActiveAiTab}
               onSendPrompt={sendPrompt}
               onSendConfirmation={sendConfirmation}
               onAbort={abort}

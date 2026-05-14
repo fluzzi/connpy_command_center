@@ -18,6 +18,8 @@ const headers = {
 export const api = {
     getInventory: () => fetch(`${API_BASE}/api/inventory`, { headers }).then(r => r.json()),
     
+    getNodeDetails: (nodeId: string) => fetch(`${API_BASE}/api/node/${encodeURIComponent(nodeId)}`, { headers }).then(r => r.json()),
+    
     awsInfo: () => fetch(`${API_BASE}/api/aws/info`, { method: 'POST', headers }).then(r => r.json()),
     
     awsInventory: (profile: string, region: string) => fetch(`${API_BASE}/api/aws/inventory`, {

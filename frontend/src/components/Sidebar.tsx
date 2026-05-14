@@ -195,34 +195,60 @@ const Sidebar: React.FC<SidebarProps> = ({ onSelectNode, activeNodeId, onCloudEx
       return sIdx === s.length;
     };
 
-    const filterTree = (items: TreeItem[]): TreeItem[] => {
-      if (!searchTerm) return items;
+    const filterTree = (items: TreeItem[], nodeTerm: string, folderTerm: string | null): TreeItem[] => {
+      if (!nodeTerm && !folderTerm) return items;
+      
       return items.map(item => {
         if (item.type === 'node') {
-          return matchNode(item.name, searchTerm) ? item : null;
+          if (folderTerm) return null; // If folder constraint is active, this node is not under a matching folder (yet)
+          return matchNode(item.name, nodeTerm) ? item : null;
         }
-        const filteredChildren = filterTree(item.children);
-        const folderMatches = matchNode(item.name, searchTerm);
-        if (folderMatches || filteredChildren.length > 0) {
+
+        // It's a folder
+        let nextFolderTerm = folderTerm;
+        const folderMatches = folderTerm ? matchNode(item.name, folderTerm) : false;
+        
+        if (folderMatches) {
+          nextFolderTerm = null; // Constraint met for this branch
+        }
+
+        const filteredChildren = filterTree(item.children, nodeTerm, nextFolderTerm);
+        
+        if (filteredChildren.length > 0) {
           return { ...item, children: filteredChildren };
         }
+        
+        // Special case: If we ARE NOT filtering by folder and the folder itself matches the nodeTerm
+        if (!folderTerm && matchNode(item.name, nodeTerm)) {
+          return { ...item, children: item.children }; 
+        }
+
         return null;
       }).filter((i): i is TreeItem => i !== null);
     };
 
-    return filterTree(root);
+    if (searchTerm.includes('@')) {
+      const parts = searchTerm.split('@');
+      const nodePart = parts[0];
+      const folderPart = parts.slice(1).join('@'); 
+      return filterTree(root, nodePart, folderPart);
+    }
+
+    return filterTree(root, searchTerm, null);
   }, [nodes, folders, searchTerm]);
 
   const filteredNodes = useMemo(() => {
-    const flatNodes: TreeItem[] = [];
+    const flatNodesMap = new Map<string, TreeItem>();
     const flatten = (items: TreeItem[]) => {
       for (const item of items) {
-        if (item.type === 'node') flatNodes.push(item);
+        if (item.type === 'node') {
+          flatNodesMap.set(item.id, item);
+        }
         if (item.children) flatten(item.children);
       }
     };
     flatten(tree);
-    return flatNodes;
+    return Array.from(flatNodesMap.values());
   }, [tree]);
 
   const singleMatchNodeId = searchTerm && filteredNodes.length === 1 ? filteredNodes[0].id : null;

@@ -66,6 +66,18 @@ async def get_inventory():
             "folders": folders
         }
 
+@app.get("/api/node/{node_id}", dependencies=[Depends(verify_api_key)])
+async def get_node_details(node_id: str):
+    async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+        stub = connpy_pb2_grpc.NodeServiceStub(channel)
+        try:
+            resp = await stub.get_node_details(connpy_pb2.IdRequest(id=node_id))
+            return MessageToDict(resp.data)
+        except grpc.aio.AioRpcError as e:
+            raise HTTPException(status_code=404, detail=f"Node {node_id} not found: {e.details()}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/aws/info", dependencies=[Depends(verify_api_key)])
 async def aws_info():
     async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:

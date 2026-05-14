@@ -1,7 +1,8 @@
 import React, { useRef, useState, useEffect } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Cpu, X, Zap, Send, Square, RotateCcw, Check, Ban, Activity, ChevronDown, ChevronUp, Bot, User, Settings } from 'lucide-react';
+import { clsx } from 'clsx';
+import { Cpu, X, Zap, Send, Square, RotateCcw, Check, Ban, Activity, ChevronDown, ChevronUp, Bot, User, Settings, Globe, Terminal } from 'lucide-react';
 import { SmartText } from './SmartText';
 import type { AiThought } from '../types';
 
@@ -63,6 +64,8 @@ interface AIPanelProps {
   selectedProfile: string;
   selectedRegion: string;
   availableNodes: string[];
+  activeTab: 'global' | 'terminal';
+  onTabChange: (tab: 'global' | 'terminal') => void;
   onSendPrompt: (input: string, sessionId: string) => boolean;
   onSendConfirmation: (thoughtId: string, answer: string) => void;
   onAbort: () => void;
@@ -77,6 +80,7 @@ interface AIPanelProps {
 
 export default function AIPanel({
   thoughts, isAiProcessing, workspaceId, selectedProfile, selectedRegion, availableNodes,
+  activeTab, onTabChange,
   onSendPrompt, onSendConfirmation, onAbort, onClearThoughts, onToggleThought, onClose,
   onOpenInspect, onOpenNode, onOpenTopology, onConnpyLink
 }: AIPanelProps) {
@@ -90,7 +94,7 @@ export default function AIPanel({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [thoughts, isAiProcessing]);
+  }, [thoughts, isAiProcessing, activeTab]);
 
   const handleSend = () => {
     const sessionId = workspaceId || 'web-session';
@@ -234,6 +238,32 @@ export default function AIPanel({
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center gap-2 px-6 border-b border-[#3b4252] bg-[#3b4252]/10 h-14 shrink-0">
+        <button
+          onClick={() => onTabChange('global')}
+          className={clsx(
+            "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-md border transition-all text-[10px] font-black uppercase tracking-widest outline-none",
+            activeTab === 'global' 
+              ? "bg-[#81a1c1]/20 border-[#81a1c1]/50 text-[#81a1c1] shadow-[0_0_10px_rgba(129,161,193,0.1)]" 
+              : "bg-[#3b4252] border-[#3b4252] text-[#4c566a] hover:border-[#81a1c1]/30 hover:text-[#81a1c1]"
+          )}
+        >
+          <Globe size={14} /> Global
+        </button>
+        <button
+          onClick={() => onTabChange('terminal')}
+          className={clsx(
+            "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-md border transition-all text-[10px] font-black uppercase tracking-widest outline-none",
+            activeTab === 'terminal' 
+              ? "bg-[#81a1c1]/20 border-[#81a1c1]/50 text-[#81a1c1] shadow-[0_0_10px_rgba(129,161,193,0.1)]" 
+              : "bg-[#3b4252] border-[#3b4252] text-[#4c566a] hover:border-[#81a1c1]/30 hover:text-[#81a1c1]"
+          )}
+        >
+          <Terminal size={14} /> Copilot
+        </button>
+      </div>
+
       {/* Thoughts Feed */}
       <div ref={scrollRef} className="flex-1 px-8 py-6 overflow-y-auto space-y-8 scrollbar-hide bg-[#3b4252]/5">
         {thoughts.length === 0 && (
@@ -244,6 +274,9 @@ export default function AIPanel({
         )}
         {thoughts.map((thought) => (
           <div key={thought.id} className="px-1 transition-all duration-300">
+            {/* Filter thoughts based on active tab for Phase 1 - 2. 
+                In a real scenario, we might need a flag in AiThought to distinguish terminal context. 
+                For now, we just show them all. */}
             {thought.type === 'tool' ? (
               <div className="rounded-xl border bg-[#81a1c1]/5 border-[#81a1c1]/20 overflow-hidden shadow-sm">
                 <div onClick={() => onToggleThought(thought.id)} className="flex items-center justify-between p-5 cursor-pointer hover:bg-[#81a1c1]/10 transition-colors">
@@ -358,7 +391,7 @@ export default function AIPanel({
             value={aiInput}
             onChange={(e) => setAiInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-            placeholder="Direct access to tactical insights..."
+            placeholder={activeTab === 'global' ? "Direct access to tactical insights..." : "Ask Terminal Copilot (Ctrl+Space)..."}
             className="w-full bg-[#2e3440] border border-[#434c5e] rounded-xl p-4 pr-12 text-xs text-[#d8dee9] focus:outline-none focus:border-[#81a1c1] transition-all resize-none h-20 scrollbar-hide shadow-inner placeholder:text-[#81a1c1]/40"
           />
           <button
