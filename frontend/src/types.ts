@@ -5,7 +5,6 @@ export interface Tab {
   customName?: string;
   meta?: Record<string, string>;
 }
-
 export interface AiThought {
   id: string;
   type: 'status' | 'debug' | 'text' | 'confirm' | 'tool' | 'engineer' | 'architect' | 'important';
@@ -15,4 +14,7 @@ export interface AiThought {
   tool_name?: string;
   isExpanded?: boolean;
   status?: 'authorized' | 'denied';
+  risk_level?: string;
+  nodeId?: string;
+  sessionId?: string;
 }

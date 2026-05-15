@@ -18,6 +18,61 @@ export function useAISession(workspaceId: string | null) {
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    // Expose dispatcher for Terminal Copilot events (bridged from Terminal WebSocket)
+    (window as any).terminalCopilotDispatcher = (payload: any) => {
+      const nodeId = payload.nodeId;
+
+      if (payload.type === 'copilot_stream_chunk') {
+        setThoughts(prev => {
+          const last = prev[prev.length - 1];
+          const isAi = (last?.type === 'engineer' || last?.type === 'architect') && last.nodeId === nodeId;
+          if (isAi) {
+            const updated = [...prev];
+            updated[updated.length - 1] = { ...last, content: (last.content || '') + payload.chunk };
+            return updated;
+          }
+          return [...prev, { id: Math.random().toString(36), type: currentResponderRef.current, content: payload.chunk, timestamp: new Date(), nodeId }];
+        });
+      } else if (payload.type === 'copilot_question_local') {
+        // User sent a question from terminal phantom input
+        setIsAiProcessing(true);
+        if (payload.persona === 'architect' || payload.persona === 'engineer') {
+          currentResponderRef.current = payload.persona;
+        }
+        setThoughts(prev => [...prev, { 
+          id: Math.random().toString(36), 
+          type: 'text', 
+          content: payload.question, 
+          timestamp: new Date(), 
+          nodeId 
+        }]);
+      } else if (payload.type === 'copilot_response_json') {
+        setIsAiProcessing(false);
+        const result = payload.data;
+        
+        // If no commands, notify terminal to "continue" and reopen input
+        if (!result.commands || result.commands.length === 0) {
+            window.dispatchEvent(new CustomEvent('copilot-continue-loop', { 
+                detail: { nodeId: nodeId } 
+            }));
+        }
+
+        setThoughts(prev => {
+          const newThought: AiThought = { 
+            id: Math.random().toString(36), 
+            type: 'confirm', // Using confirm type for action cards
+            content: JSON.stringify(result), // Store full JSON for Phase 5 rendering
+            timestamp: new Date(),
+            status: result.risk_level === 'low' ? 'authorized' : undefined,
+            nodeId
+          };
+          return [...prev, newThought];
+        });
+      } else if (payload.type === 'copilot_prompt') {
+         setIsAiProcessing(false);
+      }
+    };
+
     if (socketRef.current) {
       socketRef.current.close();
     }
@@ -159,6 +214,7 @@ export function useAISession(workspaceId: string | null) {
   }, []);
 
   const abort = useCallback(() => {
+    setIsAiProcessing(false);
     socketRef.current?.send(JSON.stringify({ interrupt: true }));
   }, []);
 
@@ -170,5 +226,5 @@ export function useAISession(workspaceId: string | null) {
 
   const isConnected = socketRef.current?.readyState === WebSocket.OPEN;
 
-  return { thoughts, isAiProcessing, isConnected, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought };
+  return { thoughts, isAiProcessing, isConnected, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought };
 }

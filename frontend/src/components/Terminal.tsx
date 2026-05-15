@@ -9,11 +9,13 @@ import type { ContextMode, Persona } from './CopilotPhantomInput';
 interface TerminalProps {
   nodeId: string;
   isActive: boolean;
+  isAiProcessing?: boolean;
   workspaceId?: string | null;
   onCopilotRequest?: (text: string, mode: ContextMode) => void;
+  onAbort?: () => void;
 }
 
-const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = null, onCopilotRequest }) => {
+const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, workspaceId = null, onCopilotRequest, onAbort }) => {
   console.warn(`Terminal Render: ${nodeId}`);
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -26,6 +28,10 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   const showCopilotRef = useRef(showCopilot);
   useEffect(() => { showCopilotRef.current = showCopilot; }, [showCopilot]);
 
+  const [isCopilotActive, setIsCopilotActive] = useState(false);
+  const isCopilotActiveRef = useRef(isCopilotActive);
+  useEffect(() => { isCopilotActiveRef.current = isCopilotActive; }, [isCopilotActive]);
+
   const [contextMode, setContextMode] = useState<ContextMode>('RANGE');
   const contextModeRef = useRef(contextMode);
   useEffect(() => { contextModeRef.current = contextMode; }, [contextMode]);
@@ -36,8 +42,10 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   const [matchedPrompt, setMatchedPrompt] = useState('>$|#$|\\$$|>.$|#.$|\\$.$');
   const [contextLines, setContextLines] = useState(50);
   const [contextBlocks, setContextBlocks] = useState(1);
+  const [remoteBlocks, setRemoteBlocks] = useState<{startPos: number, endPos: number, startPreview: string}[]>([]);
   const [memories, setMemories] = useState<string[]>([]);
   const [interactionHistory, setInteractionHistory] = useState<string[]>([]);
+  const [copilotSessionId, setCopilotSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (nodeId && !nodeId.includes(':')) {
@@ -50,35 +58,9 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     }
   }, [nodeId]);
 
-  const getPromptIndices = () => {
-    if (!xtermRef.current) return [];
-    const buffer = xtermRef.current.buffer.active;
-    const totalLines = buffer.length;
-    const indices: number[] = [];
-    
-    let promptRegex: RegExp;
-    try {
-      promptRegex = new RegExp(matchedPrompt);
-    } catch (e) {
-      // Fallback if the regex is invalid
-      promptRegex = />$|#$|\$$|>.$|#.$|\$.$/;
-    }
-
-    for (let i = 0; i < totalLines; i++) {
-      const lineText = buffer.getLine(i)?.translateToString(true) || '';
-      if (promptRegex.test(lineText)) {
-        indices.push(i);
-      }
-    }
-    return indices;
-  };
-
   const getEffectiveEnd = () => {
     if (!xtermRef.current) return 0;
     const buffer = xtermRef.current.buffer.active;
-    
-    // We look for the last line with actual text, but capped at the cursor position
-    // to avoid highlighting "future" reserved lines
     const cursorAbs = buffer.baseY + buffer.cursorY;
     
     for (let i = cursorAbs; i >= 0; i--) {
@@ -90,16 +72,85 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     return cursorAbs + 1;
   };
 
+  const getBlockIndices = (): [number, number][] => {
+    if (!xtermRef.current) return [];
+    const buffer = xtermRef.current.buffer.active;
+    const totalLines = buffer.length;
+
+    let promptRegex: RegExp;
+    try {
+      promptRegex = new RegExp(matchedPrompt);
+    } catch (e) {
+      promptRegex = />$|#$|\$$|>.$|#.$|\$.$/;
+    }
+
+    // 1. If we have remote blocks from the server, map them to line ranges
+    if (remoteBlocks.length > 0) {
+      const mappedIndices: [number, number][] = [];
+      let lastSearchLine = totalLines - 1;
+      
+      const reversedBlocks = [...remoteBlocks].reverse();
+      for (const block of reversedBlocks) {
+        let startLine = -1;
+        let endLine = lastSearchLine + 1;
+
+        // Find start line by searching for startPreview
+        for (let i = lastSearchLine; i >= 0; i--) {
+          const lineText = buffer.getLine(i)?.translateToString(true) || '';
+          if (lineText.includes(block.startPreview)) {
+            startLine = i;
+            lastSearchLine = i - 1;
+            break;
+          }
+        }
+
+        if (startLine !== -1) {
+          // Truncate endLine if we encounter an empty prompt
+          let truncatedEndLine = endLine;
+          for (let j = startLine + 1; j < endLine; j++) {
+            const lText = buffer.getLine(j)?.translateToString(true) || '';
+            const match = lText.match(promptRegex);
+            if (match) {
+              const cmdText = lText.slice(match.index! + match[0].length).trim();
+              if (cmdText === '') {
+                truncatedEndLine = j;
+                break;
+              }
+            }
+          }
+          mappedIndices.unshift([startLine, truncatedEndLine]);
+        }
+      }
+      if (mappedIndices.length > 0) return mappedIndices;
+    }
+
+    // 2. Fallback to regex (returns single-line ranges)
+    const indices: [number, number][] = [];
+
+    for (let i = 0; i < totalLines; i++) {
+      const lineText = buffer.getLine(i)?.translateToString(true) || '';
+      if (promptRegex.test(lineText)) {
+        indices.push([i, i + 1]); 
+      }
+    }
+    // Fix dummy ends for regex fallback
+    const effectiveEndVal = getEffectiveEnd();
+    for (let i = 0; i < indices.length; i++) {
+        indices[i][1] = (i + 1 < indices.length) ? indices[i+1][0] : effectiveEndVal;
+    }
+    return indices;
+  };
+
   const effectiveEnd = getEffectiveEnd();
-  const pIndices = getPromptIndices();
-  const totalB = pIndices.length || 1;
+  const blockIndices = getBlockIndices();
+  const totalB = blockIndices.length || 1;
 
   const getBlockPreview = (idx: number) => {
-    if (!xtermRef.current || pIndices.length === 0) return '';
-    const actualIdx = pIndices.length - idx;
-    if (actualIdx < 0 || actualIdx >= pIndices.length) return '';
-    const lineNum = pIndices[actualIdx];
-    const text = xtermRef.current.buffer.active.getLine(lineNum)?.translateToString(true).trim() || '';
+    if (!xtermRef.current || blockIndices.length === 0) return '';
+    const actualIdx = blockIndices.length - idx;
+    if (actualIdx < 0 || actualIdx >= blockIndices.length) return '';
+    const [startLine] = blockIndices[actualIdx];
+    const text = xtermRef.current.buffer.active.getLine(startLine)?.translateToString(true).trim() || '';
     return text;
   };
 
@@ -118,22 +169,21 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
       start = Math.max(0, effectiveEnd - cappedLines);
       end = effectiveEnd;
     } else {
-      if (pIndices.length === 0) {
+      if (blockIndices.length === 0) {
         start = effectiveEnd;
         end = effectiveEnd;
       } else if (contextMode === 'SINGLE') {
-        const blockIdx = Math.max(0, pIndices.length - contextBlocks);
-        start = pIndices[blockIdx];
-        end = (blockIdx + 1 < pIndices.length) ? pIndices[blockIdx + 1] : effectiveEnd;
+        const blockIdx = Math.max(0, blockIndices.length - contextBlocks);
+        [start, end] = blockIndices[blockIdx];
       } else {
-        const startIdx = Math.max(0, pIndices.length - contextBlocks);
-        start = pIndices[startIdx];
-        end = effectiveEnd;
+        const startIdx = Math.max(0, blockIndices.length - contextBlocks);
+        const lastIdx = blockIndices.length - 1;
+        start = blockIndices[startIdx][0];
+        end = blockIndices[lastIdx][1];
       }
     }
-    console.log("DEBUG Context Range:", { contextMode, contextLines, effectiveEnd, start, end });
     return { ctxStart: start, ctxEnd: end };
-  }, [contextMode, contextLines, contextBlocks, pIndices, effectiveEnd]);
+  }, [contextMode, contextLines, contextBlocks, blockIndices, effectiveEnd]);
 
   const ctxLineCount = ctxEnd - ctxStart;
 
@@ -159,8 +209,6 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
 
     // Add new decorations for the context range
     if (ctxStart < ctxEnd) {
-        // registerMarker() takes a CURSOR-RELATIVE offset, not an absolute line number.
-        // We need: offset = targetLine - cursorAbsoluteLine
         const cursorAbsLine = xterm.buffer.active.baseY + xterm.buffer.active.cursorY;
 
         for (let i = ctxStart; i < ctxEnd; i++) {
@@ -187,8 +235,13 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   useEffect(() => {
     if (showCopilot && xtermRef.current && ctxStart !== ctxEnd) {
       const xterm = xtermRef.current;
-      // Scroll so that 'ctxStart' is at the top of the viewport
-      xterm.scrollLines(ctxStart - xterm.buffer.active.viewportY);
+      const currentScroll = xterm.buffer.active.viewportY;
+      const target = ctxStart;
+      const diff = Math.floor(target - currentScroll);
+      
+      if (!isNaN(diff) && diff !== 0) {
+        xterm.scrollLines(diff);
+      }
     }
   }, [ctxStart, showCopilot]);
 
@@ -201,12 +254,10 @@ const contextDetail = contextMode === 'LINES'
   useEffect(() => {
     if (!terminalRef.current) return;
 
-    // Dispose old terminal if exists to prevent duplicates on remount
     if (xtermRef.current) {
         xtermRef.current.dispose();
     }
 
-    // 1. Initialize xterm
     const xterm = new XTerm({
       cursorBlink: true,
       theme: {
@@ -243,24 +294,34 @@ const contextDetail = contextMode === 'LINES'
     xtermRef.current = xterm;
     fitAddonRef.current = fitAddon;
 
-    // 2. Intelligent Ctrl+C and Ctrl+Space (Copilot)
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown') {
-        // Ctrl + C: Copy if selection
         if (e.ctrlKey && e.keyCode === 67) { 
           if (xterm.hasSelection()) {
             document.execCommand('copy');
             return false;
           }
+          if (showCopilotRef.current || isCopilotActiveRef.current) {
+            if (socketRef.current?.readyState === WebSocket.OPEN) {
+              socketRef.current.send(JSON.stringify({
+                type: 'copilot_action',
+                action: 'web_cancel',
+                session_id: copilotSessionId
+              }));
+            }
+            if (onAbort) onAbort();
+            setShowCopilot(false);
+            setIsCopilotActive(false);
+            xterm.focus();
+            return false;
+          }
         }
-        // Ctrl + Space: Toggle Copilot
         if (e.ctrlKey && e.keyCode === 32) {
           e.preventDefault();
           setShowCopilot(prev => !prev);
           return false;
         }
 
-        // Ctrl + ArrowUp / ArrowDown: Adjust Context
         if (e.ctrlKey && (e.keyCode === 38 || e.keyCode === 40)) {
           if (showCopilotRef.current) {
             e.preventDefault();
@@ -281,7 +342,6 @@ const contextDetail = contextMode === 'LINES'
       return true;
     });
 
-    // 3. Setup WebSocket
     const wsUrl = api.getTerminalWsUrl(nodeId, workspaceId || null);
     const socket = new WebSocket(wsUrl);
     socket.binaryType = 'arraybuffer';
@@ -298,6 +358,33 @@ const contextDetail = contextMode === 'LINES'
     };
 
     socket.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'copilot_prompt') {
+            setIsCopilotActive(true);
+            const info = payload.node_info;
+            if (info.session_id) {
+              setCopilotSessionId(info.session_id);
+            }
+            if (info.context_blocks) {
+              setRemoteBlocks(info.context_blocks.map((b: any) => ({
+                startPos: b[0],
+                endPos: b[1],
+                startPreview: b[2]
+              })));
+              setContextBlocks(1);
+            }            if (info.prompt) setMatchedPrompt(info.prompt);
+            if (info.os) setOs(info.os);
+          }
+          payload.nodeId = nodeId;
+          const copilotEvent = new CustomEvent('copilot-message', { detail: payload });
+          window.dispatchEvent(copilotEvent);
+        } catch (e) {
+          console.error("Error parsing WebSocket JSON:", e);
+        }
+        return;
+      }
       xterm.write(new Uint8Array(event.data));
     };
 
@@ -311,7 +398,6 @@ const contextDetail = contextMode === 'LINES'
       }
     });
 
-    // 3. Robust Resize Handling
     const resizeObserver = new ResizeObserver(() => {
       if (xtermRef.current && fitAddonRef.current) {
         try {
@@ -322,12 +408,39 @@ const contextDetail = contextMode === 'LINES'
 
     resizeObserver.observe(terminalRef.current);
 
-    // Initial fit attempts
     const fitTimer = setTimeout(() => {
       try { fitAddon.fit(); } catch { /* ignore */ }
     }, 200);
 
+    const handleExternalCancel = (e: any) => {
+      if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'copilot_action',
+          action: 'web_cancel',
+          session_id: copilotSessionId
+        }));
+        setShowCopilot(false);
+        setIsCopilotActive(false);
+        xterm.focus();
+      }
+    };
+    window.addEventListener('copilot-external-cancel', handleExternalCancel);
+
+    const handleContinueLoop = (e: any) => {
+      if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'copilot_action',
+          action: 'continue',
+          session_id: copilotSessionId
+        }));
+        setShowCopilot(true);
+      }
+    };
+    window.addEventListener('copilot-continue-loop', handleContinueLoop);
+
     return () => {
+      window.removeEventListener('copilot-external-cancel', handleExternalCancel);
+      window.removeEventListener('copilot-continue-loop', handleContinueLoop);
       clearTimeout(fitTimer);
       resizeObserver.disconnect();
       socket.close();
@@ -335,7 +448,6 @@ const contextDetail = contextMode === 'LINES'
     };
   }, [nodeId, workspaceId]);
 
-  // Handle activation/switching
   useEffect(() => {
     if (isActive && xtermRef.current && fitAddonRef.current) {
       setTimeout(() => {
@@ -363,113 +475,117 @@ const contextDetail = contextMode === 'LINES'
   };
 
   const handleCopilotSubmit = (text: string, mode: ContextMode) => {
-    console.warn("Terminal: handleCopilotSubmit START", { text, mode });
-    
-    // Scroll to bottom before finishing
     xtermRef.current?.scrollToBottom();
 
     let capturedContext = "";
     try {
       capturedContext = getCapturedContext();
-      console.warn("Terminal: Context captured, length:", capturedContext.length);
     } catch (err) {
       console.error("Terminal: CRITICAL ERROR in getCapturedContext:", err);
     }
-    
-    console.warn("%c AI COPILOT PAYLOAD ", "background: #81a1c1; color: #2e3440; font-weight: bold; padding: 2px 4px; border-radius: 3px;");
-    console.warn("Final Mode:", mode);
-    console.warn("Final Question:", text);
-    console.warn("Captured Context Content:\n", capturedContext);
 
-    // Handle Slash Commands
-    if (text.startsWith('/')) {
-      const parts = text.split(' ');
+    let currentText = text;
+    let overridePersona = persona;
+    let overrideTrust = trustMode;
+
+    if (currentText.startsWith('/')) {
+      const parts = currentText.split(' ');
       const cmd = parts[0].toLowerCase();
       const args = parts.slice(1).join(' ').trim();
-      
       const isOneShot = args.length > 0;
       const requiresArgs = (cmd === '/os' || cmd === '/prompt' || cmd === '/memorize');
 
-      if (requiresArgs && !isOneShot) {
-          return;
-      }
+      if (requiresArgs && !isOneShot) return;
 
-      // ONE-SHOT: Execute and Close, but DON'T change the official mode badges
-      if (isOneShot && !requiresArgs) {
-        if (onCopilotRequest) {
-          onCopilotRequest(`${text}\n\n[CONTEXT]\n${capturedContext}`, mode);
+      if (!isOneShot) {
+        if (cmd === '/trust') setTrustMode(true);
+        else if (cmd === '/untrust') setTrustMode(false);
+        else if (cmd === '/architect') setPersona('architect');
+        else if (cmd === '/engineer') setPersona('engineer');
+        else if (cmd === '/os') setOs(args);
+        else if (cmd === '/prompt') setMatchedPrompt(args);
+        else if (cmd === '/memorize' && args) setMemories(prev => [...prev, args]);
+        else if (cmd === '/clear') {
+          setMemories([]);
+          setInteractionHistory([]);
         }
-        setShowCopilot(false);
-        xtermRef.current?.focus();
-        return;
+        return; 
+      } else {
+        // Handle one-shot commands
+        if (cmd === '/trust') overrideTrust = true;
+        else if (cmd === '/untrust') overrideTrust = false;
+        else if (cmd === '/architect') overridePersona = 'architect';
+        else if (cmd === '/engineer') overridePersona = 'engineer';
+        // Note: For one-shots, we don't currently override /os or /prompt transiently
+        
+        currentText = args;
       }
-
-      // PERSISTENT STATE CHANGE (Only if no text was provided)
-      if (cmd === '/trust') setTrustMode(true);
-      else if (cmd === '/untrust') setTrustMode(false);
-      else if (cmd === '/architect') setPersona('architect');
-      else if (cmd === '/engineer') setPersona('engineer');
-      else if (cmd === '/os') setOs(args);
-      else if (cmd === '/prompt') setMatchedPrompt(args);
-      else if (cmd === '/memorize' && args) setMemories(prev => [...prev, args]);
-      else if (cmd === '/clear') {
-        setMemories([]);
-        setInteractionHistory([]);
-      }
-
-      return; // Keep open for state changes
     }
 
-    const memoryContext = memories.length > 0 
-      ? `\n\n[MEMORIES]\n${memories.join('\n')}`
-      : "";
-      
-    const loopContext = interactionHistory.length > 0
-      ? `\n\n[PREVIOUS INTERACTIONS]\n${interactionHistory.join('\n---\n')}`
-      : "";
+    const memoryContext = memories.length > 0 ? `\n\n[MEMORIES]\n${memories.join('\n')}` : "";
+    const loopContext = interactionHistory.length > 0 ? `\n\n[PREVIOUS INTERACTIONS]\n${interactionHistory.join('\n---\n')}` : "";
 
-    if (onCopilotRequest) {
-      // Pass node info to the panel (wrapped in a special block or metadata)
-      const metaInfo = `\n\n[NODE_INFO]\nID: ${nodeId}\nOS: ${os}\nPROMPT: ${matchedPrompt}`;
-      onCopilotRequest(`${text}${memoryContext}${loopContext}${metaInfo}\n\n[CONTEXT]\n${capturedContext}`, mode);
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      const nodeInfo = {
+        id: nodeId,
+        os: os,
+        prompt: matchedPrompt,
+        persona: overridePersona,
+        trust: overrideTrust
+      };
+
+      socketRef.current.send(JSON.stringify({
+        type: 'copilot_question',
+        question: `${currentText}${memoryContext}${loopContext}`,
+        context_buffer: capturedContext,
+        node_info_json: JSON.stringify(nodeInfo),
+        session_id: copilotSessionId
+      }));
+
+      window.dispatchEvent(new CustomEvent('copilot-message', { 
+        detail: { type: 'copilot_question_local', question: currentText, nodeId: nodeId, persona: overridePersona } 
+      }));
+
+      if (onCopilotRequest) onCopilotRequest(currentText, mode);
     }
     
-    // Update interaction history (keep last 5)
-    setInteractionHistory(prev => {
-        const newEntry = `Q: ${text}`;
-        return [...prev, newEntry].slice(-5);
-    });
-
+    setInteractionHistory(prev => [...prev, `Q: ${currentText}`].slice(-5));
     setShowCopilot(false);
     xtermRef.current?.focus();
   };
+
+  useEffect(() => {
+    if (showCopilot && socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(new Uint8Array([0]));
+    }
+  }, [showCopilot]);
 
   const handleAdjustContext = (up: boolean) => {
     if (contextMode === 'LINES') {
       setContextLines(prev => {
         const next = up ? prev + 50 : Math.max(50, prev - 50);
-        // Cap contextLines at effectiveEnd (but at least 50)
         return Math.min(next, Math.max(50, Math.ceil(effectiveEnd / 50) * 50));
       });
     } else {
-      const currentPIndices = getPromptIndices();
-      const totalB = currentPIndices.length || 1;
-      setContextBlocks(prev => {
-        const next = up ? Math.min(totalB, prev + 1) : Math.max(1, prev - 1);
-        return next;
-      });
+      const currentIndices = getBlockIndices();
+      const totalB = currentIndices.length || 1;
+      setContextBlocks(prev => up ? Math.min(totalB, prev + 1) : Math.max(1, prev - 1));
     }
   };
 
   return (
     <div style={{ width: '100%', height: '100%', background: '#2e3440', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div ref={terminalRef} style={{ flex: 1, minWidth: 0, minHeight: 0 }} />
-      
       <div className="relative">
         <CopilotPhantomInput
           isVisible={showCopilot}
           onHide={() => {
+            if (socketRef.current?.readyState === WebSocket.OPEN) {
+              socketRef.current.send(JSON.stringify({ type: 'copilot_action', action: 'web_cancel' }));
+            }
+            if (onAbort) onAbort();
             setShowCopilot(false);
+            setIsCopilotActive(false);
             xtermRef.current?.focus();
           }}
           onSubmit={handleCopilotSubmit}

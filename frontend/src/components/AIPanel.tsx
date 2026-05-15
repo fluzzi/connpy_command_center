@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { clsx } from 'clsx';
-import { Cpu, X, Zap, Send, Square, RotateCcw, Check, Ban, Activity, ChevronDown, ChevronUp, Bot, User, Settings, Globe, Terminal } from 'lucide-react';
+import { Cpu, X, Zap, Send, Square, RotateCcw, Check, Ban, Activity, ChevronDown, ChevronUp, Bot, User, Settings, Globe, Terminal as TerminalIcon } from 'lucide-react';
 import { SmartText } from './SmartText';
 import type { AiThought } from '../types';
 
@@ -61,15 +61,14 @@ interface AIPanelProps {
   isAiProcessing: boolean;
   isConnected: boolean;
   workspaceId: string | null;
-  selectedProfile: string;
-  selectedRegion: string;
   availableNodes: string[];
   activeTab: 'global' | 'terminal';
+  activeNodeId?: string;
   onTabChange: (tab: 'global' | 'terminal') => void;
   onSendPrompt: (input: string, sessionId: string) => boolean;
   onSendConfirmation: (thoughtId: string, answer: string) => void;
   onAbort: () => void;
-  onClearThoughts: () => void;
+  onClearThoughts: (tab: 'global' | 'terminal') => void;
   onToggleThought: (id: string) => void;
   onClose: () => void;
   onOpenInspect: (assetId: string, profile: string, region: string) => void;
@@ -79,8 +78,8 @@ interface AIPanelProps {
 }
 
 export default function AIPanel({
-  thoughts, isAiProcessing, workspaceId, selectedProfile, selectedRegion, availableNodes,
-  activeTab, onTabChange,
+  thoughts, isAiProcessing, workspaceId, availableNodes,
+  activeTab, activeNodeId, onTabChange,
   onSendPrompt, onSendConfirmation, onAbort, onClearThoughts, onToggleThought, onClose,
   onOpenInspect, onOpenNode, onOpenTopology, onConnpyLink
 }: AIPanelProps) {
@@ -103,8 +102,8 @@ export default function AIPanel({
   };
 
   const smartTextProps = {
-    selectedProfile,
-    selectedRegion,
+    selectedProfile: '',
+    selectedRegion: '',
     availableNodes,
     onOpenInspect,
     onOpenNode,
@@ -233,7 +232,7 @@ export default function AIPanel({
           <span className="font-black text-[10px] uppercase tracking-[0.2em] text-[#81a1c1]">Tactical Insight</span>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={onClearThoughts} className="p-2 bg-transparent border-none outline-none hover:bg-white/5 hover:text-[#d8dee9] text-[#d8dee9]/60 transition-colors rounded-md"><RotateCcw size={14} /></button>
+          <button onClick={() => onClearThoughts(activeTab)} className="p-2 bg-transparent border-none outline-none hover:bg-white/5 hover:text-[#d8dee9] text-[#d8dee9]/60 transition-colors rounded-md"><RotateCcw size={14} /></button>
           <button onClick={onClose} className="p-2 bg-transparent border-none outline-none hover:bg-white/5 hover:text-[#d8dee9] text-[#d8dee9]/60 transition-colors rounded-md"><X size={16} /></button>
         </div>
       </div>
@@ -260,156 +259,202 @@ export default function AIPanel({
               : "bg-[#3b4252] border-[#3b4252] text-[#4c566a] hover:border-[#81a1c1]/30 hover:text-[#81a1c1]"
           )}
         >
-          <Terminal size={14} /> Copilot
+          <TerminalIcon size={14} /> Copilot
         </button>
       </div>
 
-      {/* Thoughts Feed */}
-      <div ref={scrollRef} className="flex-1 px-8 py-6 overflow-y-auto space-y-8 scrollbar-hide bg-[#3b4252]/5">
-        {thoughts.length === 0 && (
-          <div className="h-full flex flex-col items-center justify-center opacity-20 space-y-4 text-center">
-            <Cpu size={32} className="text-[#81a1c1]" />
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[#d8dee9]">Neural stream idle</p>
+      {/* Thoughts Feed Container */}
+      <div className="flex-1 flex flex-col min-h-0 bg-[#3b4252]/5 overflow-hidden relative">
+        {/* Sticky Header for Terminal Tab */}
+        {activeTab === 'terminal' && activeNodeId && (
+          <div className="shrink-0 px-8 py-4 bg-[#2e3440] border-b border-[#3b4252] shadow-sm space-y-3 z-10">
+            <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-[#81a1c1]/10 border border-[#81a1c1]/30">
+              <TerminalIcon size={14} className="text-[#81a1c1]" />
+              <div className="flex flex-col">
+                <span className="text-[9px] font-black uppercase tracking-[0.2em] text-[#81a1c1]/70">Active Context</span>
+                <span className="text-xs font-mono font-bold text-[#81a1c1]">{activeNodeId}</span>
+              </div>
+            </div>
+            <button
+              onClick={onAbort}
+              className="w-full bg-[#bf616a]/10 hover:bg-[#bf616a]/20 border border-[#bf616a]/20 text-[#bf616a] text-[10px] font-black py-2.5 rounded-lg uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 group"
+            >
+              <Square size={12} className="fill-current group-hover:scale-110 transition-transform" />
+              TERMINATE MISSION
+            </button>
           </div>
         )}
-        {thoughts.map((thought) => (
-          <div key={thought.id} className="px-1 transition-all duration-300">
-            {/* Filter thoughts based on active tab for Phase 1 - 2. 
-                In a real scenario, we might need a flag in AiThought to distinguish terminal context. 
-                For now, we just show them all. */}
-            {thought.type === 'tool' ? (
-              <div className="rounded-xl border bg-[#81a1c1]/5 border-[#81a1c1]/20 overflow-hidden shadow-sm">
-                <div onClick={() => onToggleThought(thought.id)} className="flex items-center justify-between p-5 cursor-pointer hover:bg-[#81a1c1]/10 transition-colors">
-                  <div className="flex items-center"><Activity size={14} className="text-[#81a1c1] mr-6" /><span className="text-[10px] font-black uppercase tracking-widest text-[#81a1c1] italic">EXECUTE | {thought.tool_name}</span></div>
-                  {thought.isExpanded ? <ChevronUp size={14} className="text-[#81a1c1]/50" /> : <ChevronDown size={14} className="text-[#81a1c1]/50" />}
-                </div>
-                {thought.isExpanded && (
-                  <div className="p-5 pt-0 border-t border-[#81a1c1]/10">
-                    <pre className="text-[10px] font-mono text-[#d8dee9]/80 bg-[#2e3440]/80 p-4 rounded-lg overflow-x-auto whitespace-pre-wrap mt-2 border border-[#3b4252] shadow-inner">
-                      <SmartText text={thought.content} {...smartTextProps} />
-                    </pre>
-                  </div>
-                )}
+
+        {/* Scrollable Area */}
+        <div ref={scrollRef} className="flex-1 px-8 py-6 overflow-y-auto space-y-8 scrollbar-hide">
+          {activeTab === 'terminal' && !activeNodeId && (
+            <div className="h-full flex flex-col items-center justify-center opacity-30 space-y-4 text-center">
+              <TerminalIcon size={48} className="text-[#81a1c1]" />
+              <div className="space-y-1">
+                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-[#d8dee9]">No Terminal Active</p>
+                <p className="text-[9px] text-[#d8dee9]/60 max-w-[180px]">Select a node terminal to enable context-aware Copilot assistance.</p>
               </div>
-            ) : thought.type === 'important' ? (
-              <div className="rounded-xl border bg-[#bf616a]/10 border-[#bf616a]/30 overflow-hidden shadow-sm mb-2">
-                <div className="p-4 bg-[#bf616a]/20 flex items-center">
-                  <Zap size={14} className="text-[#bf616a] mr-6" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#bf616a]">UNSAFE COMMANDS DETECTED</span>
-                </div>
-                <pre className="text-[11px] font-mono text-[#d8dee9] p-5 whitespace-pre-wrap">
-                  <SmartText text={thought.content} {...smartTextProps} />
-                </pre>
-              </div>
-            ) : (thought.type === 'engineer' || thought.type === 'architect') ? (
-              <div className={`p-6 rounded-xl border flex gap-6 ${thought.type === 'architect' ? 'bg-[#b48ead]/10 border-[#b48ead]/30' : 'bg-[#5e81ac]/10 border-[#5e81ac]/30'}`}>
-                <div className={`shrink-0 w-8 h-8 rounded-md flex items-center justify-center mr-6 ${thought.type === 'architect' ? 'bg-[#b48ead]/20 text-[#b48ead]' : 'bg-[#5e81ac]/20 text-[#5e81ac]'}`}>
-                  <Bot size={18} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className={`text-[10px] font-black uppercase tracking-widest ${thought.type === 'architect' ? 'text-[#b48ead]' : 'text-[#5e81ac]'}`}>
-                      {thought.type === 'architect' ? 'Network Architect' : 'Network Engineer'}
-                    </span>
-                    <span className="text-[10px] text-[#d8dee9]/50 font-mono">{thought.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
+          )}
+
+          {activeTab === 'global' && thoughts.filter(t => !t.nodeId).length === 0 && (
+            <div className="h-full flex flex-col items-center justify-center opacity-20 space-y-4 text-center">
+              <Cpu size={32} className="text-[#81a1c1]" />
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[#d8dee9]">Neural stream idle</p>
+            </div>
+          )}
+
+          {activeTab === 'terminal' && activeNodeId && thoughts.filter(t => t.nodeId === activeNodeId).length === 0 && (
+            <div className="h-full flex flex-col items-center justify-center opacity-20 space-y-4 text-center">
+              <Bot size={32} className="text-[#81a1c1]" />
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[#d8dee9]">Copilot ready for {activeNodeId}</p>
+            </div>
+          )}
+
+          {thoughts.filter(t => {
+            if (activeTab === 'global') {
+              return !t.nodeId;
+            } else {
+              return activeNodeId ? t.nodeId === activeNodeId : false;
+            }
+          }).map((thought) => (
+            <div key={thought.id} className="px-1 transition-all duration-300">
+              {thought.type === 'tool' ? (
+                <div className="rounded-xl border bg-[#81a1c1]/5 border-[#81a1c1]/20 overflow-hidden shadow-sm">
+                  <div onClick={() => onToggleThought(thought.id)} className="flex items-center justify-between p-5 cursor-pointer hover:bg-[#81a1c1]/10 transition-colors">
+                    <div className="flex items-center"><Activity size={14} className="text-[#81a1c1] mr-6" /><span className="text-[10px] font-black uppercase tracking-widest text-[#81a1c1] italic">EXECUTE | {thought.tool_name}</span></div>
+                    {thought.isExpanded ? <ChevronUp size={14} className="text-[#81a1c1]/50" /> : <ChevronDown size={14} className="text-[#81a1c1]/50" />}
                   </div>
-                  <div className="text-[13px] text-[#d8dee9] leading-[1.4] font-mono whitespace-pre-wrap tracking-tight markdown-content">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents} urlTransform={markdownUrlTransform}>
-                      {thought.content || ''}
-                    </ReactMarkdown>
-                  </div>
+                  {thought.isExpanded && (
+                    <div className="p-5 pt-0 border-t border-[#81a1c1]/10">
+                      <pre className="text-[10px] font-mono text-[#d8dee9]/80 bg-[#2e3440]/80 p-4 rounded-lg overflow-x-auto whitespace-pre-wrap mt-2 border border-[#3b4252] shadow-inner">
+                        <SmartText text={thought.content} {...smartTextProps} />
+                      </pre>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ) : thought.type === 'text' ? (
-              <div className="flex p-6 rounded-xl bg-[#3b4252]/40 border border-[#434c5e]">
-                <div className="shrink-0 w-8 h-8 rounded-md bg-[#434c5e] flex items-center justify-center text-[#d8dee9]/50 mr-6"><User size={18} /></div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-[#81a1c1]">Operator</span>
-                    <span className="text-[10px] text-[#d8dee9]/50 font-mono">{thought.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              ) : thought.type === 'important' ? (
+                <div className="rounded-xl border bg-[#bf616a]/10 border-[#bf616a]/30 overflow-hidden shadow-sm mb-2">
+                  <div className="p-4 bg-[#bf616a]/20 flex items-center">
+                    <Zap size={14} className="text-[#bf616a] mr-6" />
+                    <span className="text-[10px] font-black uppercase tracking-widest text-[#bf616a]">UNSAFE COMMANDS DETECTED</span>
                   </div>
-                  <p className="text-sm text-[#d8dee9]/80 leading-relaxed">
+                  <pre className="text-[11px] font-mono text-[#d8dee9] p-5 whitespace-pre-wrap">
                     <SmartText text={thought.content} {...smartTextProps} />
-                  </p>
+                  </pre>
                 </div>
-              </div>
-            ) : (
-              <div className={`rounded-xl border p-5 ${thought.type === 'status' ? 'bg-[#81a1c1]/5 border-[#81a1c1]/10' : thought.type === 'confirm' ? 'bg-[#bf616a]/10 border-[#bf616a]/30 p-5' : 'bg-[#81a1c1]/10 border-[#81a1c1]/20 opacity-50'}`}>
-                <div onClick={() => thought.type === 'debug' && onToggleThought(thought.id)} className="flex items-center justify-between cursor-pointer">
-                  <div className="flex items-center">
-                    {thought.type === 'debug' ? <Settings size={10} className="text-[#81a1c1]/60 mr-6" /> : <Zap size={10} className={thought.type === 'confirm' ? 'text-[#bf616a] mr-6' : 'text-[#81a1c1] mr-6'} />}
-                    <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${thought.type === 'status' ? 'text-[#81a1c1]' : thought.type === 'confirm' ? 'text-[#bf616a]' : 'text-[#81a1c1]/60'}`}>{thought.type}</span>
+              ) : (thought.type === 'engineer' || thought.type === 'architect') ? (
+                <div className={`p-6 rounded-xl border flex gap-6 ${thought.type === 'architect' ? 'bg-[#b48ead]/10 border-[#b48ead]/30' : 'bg-[#5e81ac]/10 border-[#5e81ac]/30'}`}>
+                  <div className={`shrink-0 w-8 h-8 rounded-md flex items-center justify-center mr-6 ${thought.type === 'architect' ? 'bg-[#b48ead]/20 text-[#b48ead]' : 'bg-[#5e81ac]/20 text-[#5e81ac]'}`}>
+                    <Bot size={18} />
                   </div>
-                  {thought.type === 'debug' && (thought.isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-[10px] font-black uppercase tracking-widest ${thought.type === 'architect' ? 'text-[#b48ead]' : 'text-[#5e81ac]'}`}>
+                        {thought.type === 'architect' ? 'Network Architect' : 'Network Engineer'}
+                      </span>
+                      <span className="text-[10px] text-[#d8dee9]/50 font-mono">{thought.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                    <div className="text-[13px] text-[#d8dee9] leading-[1.4] font-mono whitespace-pre-wrap tracking-tight markdown-content">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents} urlTransform={markdownUrlTransform}>
+                        {thought.content || ''}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
                 </div>
-                {(thought.type !== 'debug' || thought.isExpanded) && (
-                  <div className="mt-2">
-                    <p className={`text-xs leading-relaxed whitespace-pre-wrap ${thought.type === 'confirm' ? 'text-[#d8dee9]/90 font-mono bg-black/20 p-3 rounded-lg border border-[#bf616a]/20' : 'text-[#81a1c1] italic'}`}>
-                      <SmartText 
-                        text={thought.type === 'confirm'
-                          ? thought.content.replace(/Execute\? \(y: yes \/ n: no \/ a: allow all this session \/ <text>: feedback\)/g, '').trim() || 'Waiting for tactical authorization...'
-                          : thought.content} 
-                        {...smartTextProps} 
-                      />
+              ) : thought.type === 'text' ? (
+                <div className="flex p-6 rounded-xl bg-[#3b4252]/40 border border-[#434c5e]">
+                  <div className="shrink-0 w-8 h-8 rounded-md bg-[#434c5e] flex items-center justify-center text-[#d8dee9]/50 mr-6"><User size={18} /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-[#81a1c1]">Operator</span>
+                      <span className="text-[10px] text-[#d8dee9]/50 font-mono">{thought.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                    <p className="text-sm text-[#d8dee9]/80 leading-relaxed">
+                      <SmartText text={thought.content} {...smartTextProps} />
                     </p>
                   </div>
-                )}
-                {thought.type === 'confirm' && (
-                  <>
-                    {thought.requires_confirmation ? (
-                      <div className="mt-4 flex gap-2">
-                        <button onClick={() => onSendConfirmation(thought.id, 'y')} className="flex-1 bg-[#a3be8c] hover:bg-[#a3be8c]/80 text-[#2e3440] text-[10px] font-black py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1"><Check size={14} /> CONFIRM</button>
-                        <button onClick={() => onSendConfirmation(thought.id, 'n')} className="flex-1 bg-[#434c5e] hover:bg-[#81a1c1] text-[#d8dee9] text-[10px] font-black py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1"><Ban size={14} /> CANCEL</button>
-                      </div>
-                    ) : thought.status && (
-                      <div className={`mt-4 py-2 px-3 rounded-lg border flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] ${thought.status === 'authorized' ? 'bg-[#a3be8c]/10 border-[#a3be8c]/30 text-[#a3be8c]' : 'bg-[#bf616a]/10 border-[#bf616a]/30 text-[#bf616a]'}`}>
-                        {thought.status === 'authorized' ? <><Check size={12} /> MISSION AUTHORIZED</> : <><Ban size={12} /> MISSION ABORTED</>}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-        {isAiProcessing && (
-          <div className="flex items-center gap-3 p-4 text-[#81a1c1]/60 animate-pulse font-black text-[10px] uppercase tracking-[0.2em]">
-            <div className="flex gap-1">
-              <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce" />
-              <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:0.2s]" />
-              <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:0.4s]" />
+                </div>
+              ) : (
+                <div className={`rounded-xl border p-5 ${thought.type === 'status' ? 'bg-[#81a1c1]/5 border-[#81a1c1]/10' : thought.type === 'confirm' ? 'bg-[#bf616a]/10 border-[#bf616a]/30 p-5' : 'bg-[#81a1c1]/10 border-[#81a1c1]/20 opacity-50'}`}>
+                  <div onClick={() => thought.type === 'debug' && onToggleThought(thought.id)} className="flex items-center justify-between cursor-pointer">
+                    <div className="flex items-center">
+                      {thought.type === 'debug' ? <Settings size={10} className="text-[#81a1c1]/60 mr-6" /> : <Zap size={10} className={thought.type === 'confirm' ? 'text-[#bf616a] mr-6' : 'text-[#81a1c1] mr-6'} />}
+                      <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${thought.type === 'status' ? 'text-[#81a1c1]' : thought.type === 'confirm' ? 'text-[#bf616a]' : 'text-[#81a1c1]/60'}`}>{thought.type}</span>
+                    </div>
+                    {thought.type === 'debug' && (thought.isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+                  </div>
+                  {(thought.type !== 'debug' || thought.isExpanded) && (
+                    <div className="mt-2">
+                      <p className={`text-xs leading-relaxed whitespace-pre-wrap ${thought.type === 'confirm' ? 'text-[#d8dee9]/90 font-mono bg-black/20 p-3 rounded-lg border border-[#bf616a]/20' : 'text-[#81a1c1] italic'}`}>
+                        <SmartText 
+                          text={thought.type === 'confirm'
+                            ? thought.content.replace(/Execute\? \(y: yes \/ n: no \/ a: allow all this session \/ <text>: feedback\)/g, '').trim() || 'Waiting for tactical authorization...'
+                            : thought.content} 
+                          {...smartTextProps} 
+                        />
+                      </p>
+                    </div>
+                  )}
+                  {thought.type === 'confirm' && (
+                    <>
+                      {thought.requires_confirmation ? (
+                        <div className="mt-4 flex gap-2">
+                          <button onClick={() => onSendConfirmation(thought.id, 'y')} className="flex-1 bg-[#a3be8c] hover:bg-[#a3be8c]/80 text-[#2e3440] text-[10px] font-black py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1"><Check size={14} /> CONFIRM</button>
+                          <button onClick={() => onSendConfirmation(thought.id, 'n')} className="flex-1 bg-[#434c5e] hover:bg-[#81a1c1] text-[#d8dee9] text-[10px] font-black py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-1"><Ban size={14} /> CANCEL</button>
+                        </div>
+                      ) : thought.status && (
+                        <div className={`mt-4 py-2 px-3 rounded-lg border flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] ${thought.status === 'authorized' ? 'bg-[#a3be8c]/10 border-[#a3be8c]/30 text-[#a3be8c]' : 'bg-[#bf616a]/10 border-[#bf616a]/30 text-[#bf616a]'}`}>
+                          {thought.status === 'authorized' ? <><Check size={12} /> MISSION AUTHORIZED</> : <><Ban size={12} /> MISSION ABORTED</>}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
-            NEURAL PROCESSING...
-          </div>
-        )}
+          ))}
+          {isAiProcessing && (
+            <div className="flex items-center gap-3 p-4 text-[#81a1c1]/60 animate-pulse font-black text-[10px] uppercase tracking-[0.2em]">
+              <div className="flex gap-1">
+                <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce" />
+                <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:0.2s]" />
+                <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:0.4s]" />
+              </div>
+              NEURAL PROCESSING...
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Input Footer */}
-      <div className="p-4 border-t border-[#3b4252] bg-[#3b4252]/40 shrink-0">
-        <div className="relative group">
-          <textarea
-            value={aiInput}
-            onChange={(e) => setAiInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-            placeholder={activeTab === 'global' ? "Direct access to tactical insights..." : "Ask Terminal Copilot (Ctrl+Space)..."}
-            className="w-full bg-[#2e3440] border border-[#434c5e] rounded-xl p-4 pr-12 text-xs text-[#d8dee9] focus:outline-none focus:border-[#81a1c1] transition-all resize-none h-20 scrollbar-hide shadow-inner placeholder:text-[#81a1c1]/40"
-          />
+      {activeTab === 'global' && (
+        <div className="p-4 border-t border-[#3b4252] bg-[#3b4252]/40 shrink-0">
+          <div className="relative group">
+            <textarea
+              value={aiInput}
+              onChange={(e) => setAiInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+              placeholder="Direct access to tactical insights..."
+              className="w-full bg-[#2e3440] border border-[#434c5e] rounded-xl p-4 pr-12 text-xs text-[#d8dee9] focus:outline-none focus:border-[#81a1c1] transition-all resize-none h-20 scrollbar-hide shadow-inner placeholder:text-[#81a1c1]/40"
+            />
+            <button
+              onClick={handleSend}
+              disabled={!aiInput.trim() || isAiProcessing}
+              className="absolute bottom-3 right-3 p-2 bg-[#5e81ac] hover:bg-[#81a1c1] text-[#eceff4] rounded-lg transition-all disabled:opacity-30 shadow-lg shadow-[#5e81ac]/20 active:scale-90"
+            >
+              <Send size={16} />
+            </button>
+          </div>
           <button
-            onClick={handleSend}
-            disabled={!aiInput.trim() || isAiProcessing}
-            className="absolute bottom-3 right-3 p-2 bg-[#5e81ac] hover:bg-[#81a1c1] text-[#eceff4] rounded-lg transition-all disabled:opacity-30 shadow-lg shadow-[#5e81ac]/20 active:scale-90"
+            onClick={onAbort}
+            className="w-full mt-3 bg-[#bf616a]/10 hover:bg-[#bf616a]/20 border border-[#bf616a]/20 text-[#bf616a] text-[10px] font-black py-2.5 rounded-lg uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 group"
           >
-            <Send size={16} />
+            <Square size={12} className="fill-current group-hover:scale-110 transition-transform" />
+            ABORT MISSION
           </button>
         </div>
-        <button
-          onClick={onAbort}
-          className="w-full mt-3 bg-[#bf616a]/10 hover:bg-[#bf616a]/20 border border-[#bf616a]/20 text-[#bf616a] text-[10px] font-black py-2.5 rounded-lg uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 group"
-        >
-          <Square size={12} className="fill-current group-hover:scale-110 transition-transform" />
-          ABORT MISSION
-        </button>
-      </div>
+      )}
     </div>
   );
 }

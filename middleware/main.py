@@ -770,6 +770,24 @@ class SharedTerminalManager:
                         while True:
                             data = await input_queue.get()
                             if data is None: break
+                            if isinstance(data, connpy_pb2.InteractRequest):
+                                yield data
+                            elif isinstance(data, str):
+                                try:
+                                    import json
+                                    payload = json.loads(data)
+                                    if payload.get("type") == "copilot_question":
+                                        yield connpy_pb2.InteractRequest(
+                                            copilot_question=payload.get("question", ""),
+                                            copilot_context_buffer=payload.get("context_buffer", ""),
+                                            copilot_node_info_json=payload.get("node_info_json", "")
+                                        )
+                                    elif payload.get("type") == "copilot_action":
+                                        yield connpy_pb2.InteractRequest(
+                                            copilot_action=payload.get("action", "")
+                                        )
+                                except: pass
+                                continue
                             yield connpy_pb2.InteractRequest(stdin_data=data)
                     except Exception as e:
                         # Error will be caught by the broadcast task
@@ -799,6 +817,41 @@ class SharedTerminalManager:
                                 for client in session['clients']:
                                     try:
                                         await client.send_bytes(response.stdout_data)
+                                    except Exception:
+                                        dead_clients.add(client)
+                                for c in dead_clients:
+                                    session['clients'].remove(c)
+                            
+                            # Handle Copilot messages in shared session
+                            import json
+                            copilot_payload = None
+                            if response.copilot_prompt:
+                                copilot_payload = {
+                                    "type": "copilot_prompt",
+                                    "node_info": json.loads(response.copilot_node_info_json) if response.copilot_node_info_json else {},
+                                    "extra_info": json.loads(response.copilot_response_json) if response.copilot_response_json else {}
+                                }
+                            elif response.copilot_stream_chunk:
+                                copilot_payload = {
+                                    "type": "copilot_stream_chunk",
+                                    "chunk": response.copilot_stream_chunk
+                                }
+                            elif response.copilot_response_json:
+                                copilot_payload = {
+                                    "type": "copilot_response_json",
+                                    "data": json.loads(response.copilot_response_json)
+                                }
+                            elif response.copilot_injected_command:
+                                copilot_payload = {
+                                    "type": "copilot_injected_command",
+                                    "command": response.copilot_injected_command
+                                }
+                            
+                            if copilot_payload:
+                                dead_clients = set()
+                                for client in session['clients']:
+                                    try:
+                                        await client.send_json(copilot_payload)
                                     except Exception:
                                         dead_clients.add(client)
                                 for c in dead_clients:
@@ -853,8 +906,18 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
                 
         try:
             while True:
-                data = await websocket.receive_bytes()
-                await session['input_queue'].put(data)
+                msg = await websocket.receive()
+                if "bytes" in msg:
+                    await session['input_queue'].put(msg["bytes"])
+                elif "text" in msg:
+                    # Echo to other clients for co-op visibility or just forward to gRPC
+                    try:
+                        import json
+                        data = json.loads(msg["text"])
+                        if data.get("type") in ("copilot_question", "copilot_action"):
+                            # Wrap in custom object that shared generator can distinguish
+                            await session['input_queue'].put(msg["text"])
+                    except: pass
         except WebSocketDisconnect:
             pass
         except Exception as e:
@@ -888,7 +951,10 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
                     data = await input_queue.get()
                     if data is None:
                         break
-                    yield connpy_pb2.InteractRequest(stdin_data=data)
+                    if isinstance(data, connpy_pb2.InteractRequest):
+                        yield data
+                    else:
+                        yield connpy_pb2.InteractRequest(stdin_data=data)
             except Exception as e:
                 error_msg = f"\r\n\x1b[31;1m[SYSTEM ERROR]\x1b[0m\r\n\x1b[31m{str(e)}\x1b[0m\r\n"
                 try:
@@ -902,8 +968,25 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
             async def read_from_websocket():
                 try:
                     while True:
-                        data = await websocket.receive_bytes()
-                        await input_queue.put(data)
+                        msg = await websocket.receive()
+                        if "bytes" in msg:
+                            await input_queue.put(msg["bytes"])
+                        elif "text" in msg:
+                            try:
+                                import json
+                                data = json.loads(msg["text"])
+                                if data.get("type") == "copilot_question":
+                                    await input_queue.put(connpy_pb2.InteractRequest(
+                                        copilot_question=data.get("question", ""),
+                                        copilot_context_buffer=data.get("context_buffer", ""),
+                                        copilot_node_info_json=data.get("node_info_json", "")
+                                    ))
+                                elif data.get("type") == "copilot_action":
+                                    await input_queue.put(connpy_pb2.InteractRequest(
+                                        copilot_action=data.get("action", "")
+                                    ))
+                            except Exception as e:
+                                print(f"Error parsing Copilot JSON: {e}")
                 except WebSocketDisconnect:
                     await input_queue.put(None)
                 except Exception:
@@ -914,6 +997,34 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
                     async for response in call:
                         if response.stdout_data:
                             await websocket.send_bytes(response.stdout_data)
+                        
+                        # Handle Copilot messages
+                        import json
+                        copilot_payload = None
+                        if response.copilot_prompt:
+                            copilot_payload = {
+                                "type": "copilot_prompt",
+                                "node_info": json.loads(response.copilot_node_info_json) if response.copilot_node_info_json else {},
+                                "extra_info": json.loads(response.copilot_response_json) if response.copilot_response_json else {}
+                            }
+                        elif response.copilot_stream_chunk:
+                            copilot_payload = {
+                                "type": "copilot_stream_chunk",
+                                "chunk": response.copilot_stream_chunk
+                            }
+                        elif response.copilot_response_json:
+                            copilot_payload = {
+                                "type": "copilot_response_json",
+                                "data": json.loads(response.copilot_response_json)
+                            }
+                        elif response.copilot_injected_command:
+                            copilot_payload = {
+                                "type": "copilot_injected_command",
+                                "command": response.copilot_injected_command
+                            }
+                        
+                        if copilot_payload:
+                            await websocket.send_json(copilot_payload)
                 except grpc.aio.AioRpcError as e:
                     error_msg = f"\r\n\x1b[31;1m[CONNECTION ERROR]\x1b[0m\r\n\x1b[31m{e.details()}\x1b[0m\r\n"
                     await websocket.send_bytes(error_msg.encode())

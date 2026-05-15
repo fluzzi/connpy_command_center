@@ -81,7 +81,7 @@ const CopilotPhantomInput: React.FC<CopilotPhantomInputProps> = ({
         const cmd = filteredCommands[selectedIndex].cmd;
         setInput(cmd + ' ');
       } else {
-        const modes: ContextMode[] = ['LINES', 'SINGLE', 'RANGE'];
+        const modes: ContextMode[] = ['RANGE', 'SINGLE', 'LINES'];
         const nextIndex = (modes.indexOf(activeContextMode) + 1) % modes.length;
         onContextModeChange(modes[nextIndex]);
       }
@@ -232,7 +232,7 @@ const CopilotPhantomInput: React.FC<CopilotPhantomInputProps> = ({
         {contextDetail && (
           <button
             onClick={() => {
-               const modes: ContextMode[] = ['LINES', 'SINGLE', 'RANGE'];
+               const modes: ContextMode[] = ['RANGE', 'SINGLE', 'LINES'];
                const nextIndex = (modes.indexOf(activeContextMode) + 1) % modes.length;
                onContextModeChange(modes[nextIndex]);
             }}

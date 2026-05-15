@@ -14,6 +14,8 @@ interface CloudExplorerProps {
   selectedRegion: string;
   setSelectedProfile: (profile: string) => void;
   setSelectedRegion: (region: string) => void;
+  profiles: string[];
+  regions: string[];
   onRename?: (newName: string) => void;
 }
 
@@ -47,11 +49,8 @@ interface InventoryData {
   [key: string]: CloudAsset[] | undefined;
 }
 
-export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, onOpenSSM, onOpenGraph, workspaceId, ws, selectedProfile, selectedRegion, setSelectedProfile, setSelectedRegion, onRename }: CloudExplorerProps) {
-  const [profiles, setProfiles] = useState<string[]>([]);
-  const [regions, setRegions] = useState<string[]>([]);
-  
-  const [isLoadingInfo, setIsLoadingInfo] = useState(true);
+export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, onOpenSSM, onOpenGraph, workspaceId, ws, selectedProfile, selectedRegion, setSelectedProfile, setSelectedRegion, profiles, regions, onRename }: CloudExplorerProps) {
+  const [isLoadingInfo, setIsLoadingInfo] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,12 +63,12 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
         try {
             const data = JSON.parse(event.data);
             if (data.type === 'aws_discovery_start') {
+                if (data.profile !== selectedProfile || data.region !== selectedRegion) return;
                 setIsScanning(true);
                 setInventory(null);
                 setError(null);
-                if (data.profile) setSelectedProfile(data.profile);
-                if (data.region) setSelectedRegion(data.region);
             } else if (data.type === 'aws_discovery_complete') {
+                if (data.profile !== selectedProfile || data.region !== selectedRegion) return;
                 setIsScanning(false);
                 setInventory(data.inventory);
                 setError(data.error || null);
@@ -79,7 +78,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
 
     ws.current.addEventListener('message', handleWsMessage);
     return () => ws.current?.removeEventListener('message', handleWsMessage);
-  }, [ws, workspaceId]);
+  }, [ws, workspaceId, selectedProfile, selectedRegion]);
 
   const [activeTab, setActiveTab] = useState<keyof InventoryData>('instances');
   const [searchTerm, setSearchTerm] = useState('');
@@ -92,21 +91,6 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
     setCopiedId(text);
     setTimeout(() => setCopiedId(null), 2000);
   };
-
-  useEffect(() => {
-    api.awsInfo()
-      .then(data => {
-        if (data.error) throw new Error(data.error);
-        const p = Array.isArray(data.profiles) ? data.profiles : [];
-        const r = Array.isArray(data.regions) ? data.regions : [];
-        setProfiles(p);
-        setRegions(r);
-        if (p.length > 0) setSelectedProfile(p[0]);
-        if (r.length > 0) setSelectedRegion(r[0]);
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setIsLoadingInfo(false));
-  }, []);
 
   const handleScan = async () => {
     if (!selectedProfile || !selectedRegion) return;
@@ -136,7 +120,9 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
       if (ws?.current && workspaceId) {
           ws.current.send(JSON.stringify({ 
               type: 'aws_discovery_complete', 
-              inventory: data 
+              inventory: data,
+              profile: selectedProfile,
+              region: selectedRegion
           }));
       }
     } catch (e: unknown) {
@@ -146,7 +132,9 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
           ws.current.send(JSON.stringify({ 
               type: 'aws_discovery_complete', 
               error: errorMsg,
-              inventory: null
+              inventory: null,
+              profile: selectedProfile,
+              region: selectedRegion
           }));
       }
     } finally {

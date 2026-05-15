@@ -24,6 +24,8 @@ function App() {
   // Global AWS Context (shared with CloudExplorer)
   const [selectedProfile, setSelectedProfile] = useState('');
   const [selectedRegion, setSelectedRegion] = useState('');
+  const [profiles, setProfiles] = useState<string[]>([]);
+  const [regions, setRegions] = useState<string[]>([]);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
 
@@ -38,7 +40,7 @@ function App() {
 
   // --- Hooks ---
   const { workspaceId, socketRef: workspaceSocketRef, updateTabsAndPush, toggleWorkspace } = useWorkspace(tabs, setTabs);
-  const { thoughts, isAiProcessing, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought } = useAISession(workspaceId);
+  const { thoughts, isAiProcessing, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought } = useAISession(workspaceId);
 
   // Auto-scroll AI panel
   useEffect(() => {
@@ -50,12 +52,42 @@ function App() {
     api.getInventory()
       .then(res => { if (res?.nodes && Array.isArray(res.nodes)) setAvailableNodes(res.nodes); })
       .catch(e => console.error('Failed to fetch available nodes', e));
+    
+    api.awsInfo()
+      .then(data => {
+        if (data.error) return;
+        const p = Array.isArray(data.profiles) ? data.profiles : [];
+        const r = Array.isArray(data.regions) ? data.regions : [];
+        setProfiles(p);
+        setRegions(r);
+        if (p.length > 0) setSelectedProfile(p[0]);
+        if (r.length > 0) setSelectedRegion(r[0]);
+      })
+      .catch(e => console.error('Failed to fetch AWS info', e));
+  }, []);
+
+  // Bridge Terminal Copilot events to the AI Panel
+  useEffect(() => {
+    const handleCopilotMessage = (e: any) => {
+      const payload = e.detail;
+      const dispatcher = (window as any).terminalCopilotDispatcher;
+      if (dispatcher) {
+        dispatcher(payload);
+      }
+    };
+    window.addEventListener('copilot-message', handleCopilotMessage);
+    return () => window.removeEventListener('copilot-message', handleCopilotMessage);
   }, []);
 
   const activeTab = tabs.find(t => t.id === activeTabId);
 
   // --- Tab Helpers ---
   const closeTab = (tabId: string) => {
+    const tabToClose = tabs.find(t => t.id === tabId);
+    if (tabToClose?.nodeId) {
+      // Clear AI thoughts for this node when closing the tab
+      setThoughts(prev => prev.filter(t => t.nodeId !== tabToClose.nodeId));
+    }
     const newTabs = tabs.filter(t => t.id !== tabId);
     updateTabsAndPush(newTabs);
     if (activeTabId === tabId) setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
@@ -71,7 +103,7 @@ function App() {
   };
 
   const handleOpenInspect = (assetId: string, profile: string, region: string) => {
-    const tabId = `inspect:${assetId}`;
+    const tabId = `inspect:${assetId}:${profile}:${region}`;
     const existing = tabs.find(t => t.id === tabId);
     if (existing) { setActiveTabId(existing.id); return; }
     const newTab: Tab = { id: tabId, nodeId: assetId, type: 'cloud_inspect', meta: { profile, region } };
@@ -80,7 +112,7 @@ function App() {
   };
 
   const handleOpenFlowLog = (eniId: string, flId: string, profile: string, region: string) => {
-    const tabId = `flowlog:${flId}`;
+    const tabId = `flowlog:${flId}:${profile}:${region}`;
     const existing = tabs.find(t => t.id === tabId);
     if (existing) { setActiveTabId(existing.id); return; }
     const newTab: Tab = { id: tabId, nodeId: flId, type: 'cloud_flowlog', meta: { profile, region, eniId } };
@@ -89,7 +121,7 @@ function App() {
   };
 
   const handleOpenGraph = (identifier: string, metricType: 'bw' | 'pps', profile: string, region: string) => {
-    const tabId = `graph:${metricType}:${identifier}`;
+    const tabId = `graph:${metricType}:${identifier}:${profile}:${region}`;
     const existing = tabs.find(t => t.id === tabId);
     if (existing) { setActiveTabId(existing.id); return; }
     const newTab: Tab = { id: tabId, nodeId: `${metricType.toUpperCase()} - ${identifier}`, type: 'cloud_graph', meta: { profile, region, metricType, identifier } };
@@ -116,10 +148,13 @@ function App() {
   };
 
   const handleOpenCloudExplorer = () => {
-    const existing = tabs.find(t => t.type === 'cloud_explorer');
-    if (existing) { setActiveTabId(existing.id); return; }
     const newId = Math.random().toString(36).substring(7);
-    const newTabs: Tab[] = [...tabs, { id: newId, nodeId: 'AWS Explorer', type: 'cloud_explorer' }];
+    const newTabs: Tab[] = [...tabs, { 
+      id: newId, 
+      nodeId: 'AWS Explorer', 
+      type: 'cloud_explorer',
+      meta: { profile: selectedProfile, region: selectedRegion }
+    }];
     updateTabsAndPush(newTabs);
     setActiveTabId(newId);
   };
@@ -158,6 +193,28 @@ function App() {
     setActiveTabId(tabId);
   };
 
+  const handleAbort = () => {
+    // 1. Always abort the global AI session
+    abort();
+
+    // 2. If we are in a terminal tab, send an external cancel event to that terminal's WebSocket
+    if (activeTab?.type === 'terminal' && activeTab.nodeId) {
+      window.dispatchEvent(new CustomEvent('copilot-external-cancel', { 
+        detail: { nodeId: activeTab.nodeId } 
+      }));
+    }
+  };
+
+  const handleClearThoughts = (tab: 'global' | 'terminal') => {
+    if (tab === 'global') {
+      // Clear only global thoughts (those with no nodeId)
+      setThoughts(prev => prev.filter(t => t.nodeId));
+    } else if (activeTab?.type === 'terminal' && activeTab.nodeId) {
+      // Clear only thoughts for the CURRENT active node
+      setThoughts(prev => prev.filter(t => t.nodeId !== activeTab.nodeId));
+    }
+  };
+
   const handleCopilotRequest = (text: string, mode: string) => {
     setShowAiPanel(true);
     setActiveAiTab('terminal');
@@ -169,8 +226,8 @@ function App() {
       const urlObj = new URL(url);
       if (urlObj.protocol === 'connpy:' && urlObj.host === 'aws' && urlObj.pathname === '/inspect') {
         const id = urlObj.searchParams.get('id');
-        const profile = urlObj.searchParams.get('profile') || selectedProfile;
-        const region = urlObj.searchParams.get('region') || selectedRegion;
+        const profile = urlObj.searchParams.get('profile') || (activeTab?.meta?.profile || selectedProfile);
+        const region = urlObj.searchParams.get('region') || (activeTab?.meta?.region || selectedRegion);
         if (id && profile && region) handleOpenInspect(id, profile, region);
       }
     } catch (e) {
@@ -373,10 +430,20 @@ function App() {
                       onOpenGraph={handleOpenGraph}
                       workspaceId={workspaceId}
                       ws={workspaceSocketRef}
-                      selectedProfile={selectedProfile}
-                      selectedRegion={selectedRegion}
-                      setSelectedProfile={setSelectedProfile}
-                      setSelectedRegion={setSelectedRegion}
+                      selectedProfile={tab.meta?.profile || selectedProfile}
+                      selectedRegion={tab.meta?.region || selectedRegion}
+                      profiles={profiles}
+                      regions={regions}
+                      setSelectedProfile={(p) => {
+                        const newTabs = tabs.map(t => t.id === tab.id ? { ...t, meta: { ...t.meta, profile: p } } : t);
+                        updateTabsAndPush(newTabs);
+                        setSelectedProfile(p);
+                      }}
+                      setSelectedRegion={(r) => {
+                        const newTabs = tabs.map(t => t.id === tab.id ? { ...t, meta: { ...t.meta, region: r } } : t);
+                        updateTabsAndPush(newTabs);
+                        setSelectedRegion(r);
+                      }}
                       onRename={(newName) => handleRenameSubmit(tab.id, newName)}
                     />
                   ) : tab.type === 'playbook_editor' ? (
@@ -431,8 +498,10 @@ function App() {
                     <Terminal 
                       nodeId={tab.nodeId} 
                       isActive={activeTabId === tab.id} 
+                      isAiProcessing={isAiProcessing}
                       workspaceId={workspaceId}
                       onCopilotRequest={handleCopilotRequest}
+                      onAbort={handleAbort}
                     />
                   )}
                 </div>
@@ -447,15 +516,14 @@ function App() {
               isAiProcessing={isAiProcessing}
               isConnected={true}
               workspaceId={workspaceId}
-              selectedProfile={selectedProfile}
-              selectedRegion={selectedRegion}
+              activeNodeId={activeTab?.type === 'terminal' ? activeTab.nodeId : undefined}
               availableNodes={availableNodes}
               activeTab={activeAiTab}
               onTabChange={setActiveAiTab}
               onSendPrompt={sendPrompt}
               onSendConfirmation={sendConfirmation}
-              onAbort={abort}
-              onClearThoughts={clearThoughts}
+              onAbort={handleAbort}
+              onClearThoughts={handleClearThoughts}
               onToggleThought={toggleThought}
               onClose={() => setShowAiPanel(false)}
               onOpenInspect={handleOpenInspect}
