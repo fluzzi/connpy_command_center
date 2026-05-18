@@ -116,7 +116,6 @@ const CopilotPhantomInput: React.FC<CopilotPhantomInputProps> = ({
         }
       }
     } else if (e.key === 'Enter') {
-      console.warn("CopilotPhantomInput: ENTER DETECTED", { input, showAutocomplete, hasCommands: filteredCommands.length > 0 });
       if (showAutocomplete && filteredCommands.length > 0) {
         e.preventDefault();
         const cmd = filteredCommands[selectedIndex].cmd;
@@ -124,16 +123,14 @@ const CopilotPhantomInput: React.FC<CopilotPhantomInputProps> = ({
         setShowAutocomplete(false);
       } else if (input.trim()) {
         e.preventDefault();
-        console.warn("CopilotPhantomInput: CALLING onSubmit", input, activeContextMode);
-        
+
         // Add to history if not same as last
         setHistory(prev => {
           const newHist = prev.filter(h => h !== input);
           return [...newHist, input].slice(-50);
         });
+        onSubmit(input.trim(), activeContextMode);
         setHistoryIndex(-1);
-
-        onSubmit(input, activeContextMode);
         setInput('');
       }
     }
@@ -240,7 +237,9 @@ const CopilotPhantomInput: React.FC<CopilotPhantomInputProps> = ({
             title={`Click to cycle mode: ${contextDetail}`}
           >
             <Layout size={14} />
-            <span className="uppercase tracking-widest mr-2">{activeContextMode}:</span>
+            <span className="uppercase tracking-widest mr-2">
+              {activeContextMode === 'SINGLE' ? 'CMD' : activeContextMode}:
+            </span>
             <span className="truncate">{contextDetail}</span>
           </button>
         )}

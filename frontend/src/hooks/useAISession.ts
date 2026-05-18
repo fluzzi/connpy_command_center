@@ -51,22 +51,66 @@ export function useAISession(workspaceId: string | null) {
         const result = payload.data;
         
         // If no commands, notify terminal to "continue" and reopen input
-        if (!result.commands || result.commands.length === 0) {
+        const hasCommands = result.commands && result.commands.length > 0;
+        if (!hasCommands) {
             window.dispatchEvent(new CustomEvent('copilot-continue-loop', { 
                 detail: { nodeId: nodeId } 
             }));
         }
 
         setThoughts(prev => {
-          const newThought: AiThought = { 
-            id: Math.random().toString(36), 
-            type: 'confirm', // Using confirm type for action cards
-            content: JSON.stringify(result), // Store full JSON for Phase 5 rendering
-            timestamp: new Date(),
-            status: result.risk_level === 'low' ? 'authorized' : undefined,
-            nodeId
-          };
-          return [...prev, newThought];
+          const type = hasCommands ? 'confirm' : (currentResponderRef.current || 'engineer');
+          
+          // Optimization: If the last thought was a streamed guide for this node, 
+          // we update it with the final guide text, but keep it as a normal AI message.
+          const last = prev[prev.length - 1];
+          const isLastStreamed = last && last.nodeId === nodeId && (last.type === 'engineer' || last.type === 'architect');
+
+          if (isLastStreamed) {
+            const updated = [...prev];
+            // Update the guide message
+            updated[updated.length - 1] = { 
+              ...last, 
+              content: result.guide || last.content
+            };
+            
+            // If there are commands, append the Action Card as a separate NEW thought
+            if (hasCommands) {
+              const actionCard: AiThought = {
+                id: Math.random().toString(36),
+                type: 'confirm',
+                content: JSON.stringify({ ...result, guide: undefined }), // Remove guide from card data as it's shown above
+                timestamp: new Date(),
+                status: payload.auto_authorized ? 'authorized' : undefined,
+                nodeId
+              };
+              updated.push(actionCard);
+            }
+            return updated;
+          }
+
+          // Fallback: Add as new thoughts
+          const newThoughts = [...prev];
+          if (result.guide) {
+            newThoughts.push({
+              id: Math.random().toString(36),
+              type: (currentResponderRef.current || 'engineer') as any,
+              content: result.guide,
+              timestamp: new Date(),
+              nodeId
+            });
+          }
+          if (hasCommands) {
+            newThoughts.push({ 
+              id: Math.random().toString(36), 
+              type: 'confirm',
+              content: JSON.stringify({ ...result, guide: undefined }),
+              timestamp: new Date(),
+              status: payload.auto_authorized ? 'authorized' : undefined,
+              nodeId
+            });
+          }
+          return newThoughts;
         });
       } else if (payload.type === 'copilot_prompt') {
          setIsAiProcessing(false);
@@ -209,8 +253,8 @@ export function useAISession(workspaceId: string | null) {
   const sendConfirmation = useCallback((thoughtId: string, answer: string) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ confirmation_answer: answer }));
-      setThoughts(prev => prev.map(t => t.id === thoughtId ? { ...t, requires_confirmation: false, status: answer === 'y' ? 'authorized' : 'denied' } : t));
     }
+    setThoughts(prev => prev.map(t => t.id === thoughtId ? { ...t, requires_confirmation: false, status: answer === 'y' ? 'authorized' : 'denied' } : t));
   }, []);
 
   const abort = useCallback(() => {

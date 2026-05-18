@@ -15,8 +15,11 @@ interface TerminalProps {
   onAbort?: () => void;
 }
 
-const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, workspaceId = null, onCopilotRequest, onAbort }) => {
-  console.warn(`Terminal Render: ${nodeId}`);
+const stripAnsi = (str: string) => {
+  return str.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+};
+
+const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = null, onCopilotRequest, onAbort }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -38,6 +41,9 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
 
   const [persona, setPersona] = useState<Persona>('engineer');
   const [trustMode, setTrustMode] = useState(false);
+  const trustModeRef = useRef(trustMode);
+  useEffect(() => { trustModeRef.current = trustMode; }, [trustMode]);
+
   const [os, setOs] = useState('linux');
   const [matchedPrompt, setMatchedPrompt] = useState('>$|#$|\\$$|>.$|#.$|\\$.$');
   const [contextLines, setContextLines] = useState(50);
@@ -47,10 +53,15 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
   const [interactionHistory, setInteractionHistory] = useState<string[]>([]);
   const [copilotSessionId, setCopilotSessionId] = useState<string | null>(null);
 
+  // Phase 5: Persistence & One-shot overrides
+  const isUserOverridden = useRef(false);
+  const oneShotTrustRef = useRef<boolean | null>(null);
+
   useEffect(() => {
-    if (nodeId && !nodeId.includes(':')) {
+    if (nodeId && !nodeId.includes(':') && !isUserOverridden.current) {
       api.getNodeDetails(nodeId)
         .then(details => {
+          if (isUserOverridden.current) return; // Guard against race if user typed /os while fetching
           if (details.prompt) setMatchedPrompt(details.prompt);
           if (details.os) setOs(details.os);
         })
@@ -65,8 +76,9 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
     
     for (let i = cursorAbs; i >= 0; i--) {
       const line = buffer.getLine(i);
-      if (line && line.translateToString(true).trim().length > 0) {
-        return i + 1;
+      if (line) {
+        const text = stripAnsi(line.translateToString(true)).trim();
+        if (text.length > 0) return i + 1;
       }
     }
     return cursorAbs + 1;
@@ -90,17 +102,39 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
       let lastSearchLine = totalLines - 1;
       
       const reversedBlocks = [...remoteBlocks].reverse();
-      for (const block of reversedBlocks) {
+      for (const [idx, block] of reversedBlocks.entries()) {
         let startLine = -1;
         let endLine = lastSearchLine + 1;
-
-        // Find start line by searching for startPreview
+        const targetPreview = stripAnsi(block.startPreview).trim();
+        
+        // Find start line by searching for startPreview (normalized)
+        // Note: xterm.js might split long commands across multiple physical lines if the terminal is narrow.
+        // To fix this, we normalize all internal whitespace in the preview.
+        const normalizedTarget = targetPreview.replace(/\s+/g, '');
+        
         for (let i = lastSearchLine; i >= 0; i--) {
-          const lineText = buffer.getLine(i)?.translateToString(true) || '';
-          if (lineText.includes(block.startPreview)) {
+          const rawLine = buffer.getLine(i)?.translateToString(true) || '';
+          const cleanLine = stripAnsi(rawLine).trim();
+          
+          // Fast path: Exact match on single line
+          if (cleanLine.includes(targetPreview)) {
             startLine = i;
             lastSearchLine = i - 1;
             break;
+          }
+          
+          // Slow path: Check if the preview spans across this line and the next line(s)
+          // Combine up to 3 lines (current and 2 below) to catch wrapped text safely
+          const line0 = stripAnsi(buffer.getLine(i)?.translateToString(true) || '');
+          const line1 = i + 1 < buffer.length ? stripAnsi(buffer.getLine(i+1)?.translateToString(true) || '') : '';
+          const line2 = i + 2 < buffer.length ? stripAnsi(buffer.getLine(i+2)?.translateToString(true) || '') : '';
+          
+          const combinedClean = (line0 + line1 + line2).replace(/\s+/g, '');
+          
+          if (combinedClean.includes(normalizedTarget)) {
+              startLine = i;
+              lastSearchLine = i - 1;
+              break;
           }
         }
 
@@ -108,7 +142,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
           // Truncate endLine if we encounter an empty prompt
           let truncatedEndLine = endLine;
           for (let j = startLine + 1; j < endLine; j++) {
-            const lText = buffer.getLine(j)?.translateToString(true) || '';
+            const lText = stripAnsi(buffer.getLine(j)?.translateToString(true) || '').trim();
             const match = lText.match(promptRegex);
             if (match) {
               const cmdText = lText.slice(match.index! + match[0].length).trim();
@@ -128,7 +162,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
     const indices: [number, number][] = [];
 
     for (let i = 0; i < totalLines; i++) {
-      const lineText = buffer.getLine(i)?.translateToString(true) || '';
+      const lineText = stripAnsi(buffer.getLine(i)?.translateToString(true) || '').trim();
       if (promptRegex.test(lineText)) {
         indices.push([i, i + 1]); 
       }
@@ -143,7 +177,6 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
 
   const effectiveEnd = getEffectiveEnd();
   const blockIndices = getBlockIndices();
-  const totalB = blockIndices.length || 1;
 
   const getBlockPreview = (idx: number) => {
     if (!xtermRef.current || blockIndices.length === 0) return '';
@@ -184,8 +217,6 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
     }
     return { ctxStart: start, ctxEnd: end };
   }, [contextMode, contextLines, contextBlocks, blockIndices, effectiveEnd]);
-
-  const ctxLineCount = ctxEnd - ctxStart;
 
   // Visual Highlighting: Update decorations when range changes
   useEffect(() => {
@@ -246,10 +277,10 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, isAiProcessing, w
   }, [ctxStart, showCopilot]);
 
 const contextDetail = contextMode === 'LINES' 
-    ? `${Math.min(contextLines, effectiveEnd)} lines (${Math.min(100, Math.round((contextLines/(effectiveEnd||1))*100))}%)` 
+    ? `${Math.min(contextLines, effectiveEnd)} (${Math.min(100, Math.round((contextLines/(effectiveEnd||1))*100))}%)` 
     : contextMode === 'SINGLE' 
-      ? `Cmd Block [${contextBlocks}]: ${currentBlockText}`
-      : `Range [${contextBlocks} blocks]: ${currentBlockText}`;
+      ? `${contextBlocks} (${ctxEnd - ctxStart}L~): ${currentBlockText}`
+      : `${contextBlocks} (${ctxEnd - ctxStart}L~): ${currentBlockText}`;
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -296,28 +327,56 @@ const contextDetail = contextMode === 'LINES'
 
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown') {
-        if (e.ctrlKey && e.keyCode === 67) { 
-          if (xterm.hasSelection()) {
-            document.execCommand('copy');
+        const isCancelKey = (e.ctrlKey && e.keyCode === 67) || (e.keyCode === 27); // Ctrl+C or Escape
+        const char = e.key.toLowerCase();
+
+        // If Copilot is waiting for an action, intercept Y/N/E/Esc completely
+        if (isCopilotActiveRef.current) {
+          if (char === 'y') {
+            e.preventDefault();
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent('copilot-run-commands', { detail: { nodeId } }));
             return false;
           }
-          if (showCopilotRef.current || isCopilotActiveRef.current) {
-            if (socketRef.current?.readyState === WebSocket.OPEN) {
-              socketRef.current.send(JSON.stringify({
-                type: 'copilot_action',
-                action: 'web_cancel',
-                session_id: copilotSessionId
-              }));
-            }
-            if (onAbort) onAbort();
-            setShowCopilot(false);
-            setIsCopilotActive(false);
-            xterm.focus();
+          if (char === 'n' || e.keyCode === 27) { // N or Escape
+            e.preventDefault();
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
+            return false;
+          }
+          if (char === 'e') {
+            e.preventDefault();
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent('copilot-edit-commands', { detail: { nodeId } }));
             return false;
           }
         }
+
+        if (isCancelKey) { 
+          if (xterm.hasSelection() && e.ctrlKey) {
+            document.execCommand('copy');
+            return false;
+          }
+          
+          // Rejection logic: Unify Ctrl+C and Escape to always kill copilot session if active
+          if (showCopilotRef.current || isCopilotActiveRef.current) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
+            return false; // Prevent Ctrl+C from going to terminal
+          }
+        }
+        
         if (e.ctrlKey && e.keyCode === 32) {
           e.preventDefault();
+          e.stopPropagation();
+          
+          // If a session is already active (Action Card open), treat Ctrl+Space as a rejection/cancel
+          if (isCopilotActiveRef.current) {
+             window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
+             return false;
+          }
+
           setShowCopilot(prev => !prev);
           return false;
         }
@@ -374,9 +433,35 @@ const contextDetail = contextMode === 'LINES'
                 startPreview: b[2]
               })));
               setContextBlocks(1);
-            }            if (info.prompt) setMatchedPrompt(info.prompt);
-            if (info.os) setOs(info.os);
+            }
+            
+            // Only update OS and Prompt from server if we haven't manually overridden them yet
+            if (!isUserOverridden.current) {
+              if (info.prompt) setMatchedPrompt(info.prompt);
+              if (info.os) setOs(info.os);
+            }
           }
+
+          // Phase 5: Trust Mode Auto-Execution (Respects persistent mode OR one-shot override)
+          if (payload.type === 'copilot_response_json') {
+            const result = payload.data;
+            const effectiveTrust = oneShotTrustRef.current !== null ? oneShotTrustRef.current : trustModeRef.current;
+            
+            if (effectiveTrust && result.commands && result.commands.length > 0 && result.risk_level !== 'destructive') {
+              socketRef.current?.send(JSON.stringify({
+                type: 'copilot_action',
+                action: 'send_all',
+                session_id: copilotSessionId
+              }));
+              setIsCopilotActive(false);
+              // Mark as auto-authorized for UI
+              payload.auto_authorized = true;
+            }
+            
+            // Clear one-shot override after response
+            oneShotTrustRef.current = null;
+          }
+
           payload.nodeId = nodeId;
           const copilotEvent = new CustomEvent('copilot-message', { detail: payload });
           window.dispatchEvent(copilotEvent);
@@ -420,11 +505,48 @@ const contextDetail = contextMode === 'LINES'
           session_id: copilotSessionId
         }));
         setShowCopilot(false);
-        setIsCopilotActive(false);
-        xterm.focus();
+        // Delay re-enabling terminal input to prevent key leakage
+        setTimeout(() => {
+          setIsCopilotActive(false);
+          xterm.focus();
+        }, 50);
       }
     };
     window.addEventListener('copilot-external-cancel', handleExternalCancel);
+
+    const handleRunCommands = (e: any) => {
+      if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'copilot_action',
+          action: 'send_all',
+          session_id: copilotSessionId
+        }));
+        // Delay re-enabling terminal input to prevent key leakage
+        setTimeout(() => {
+          setIsCopilotActive(false);
+          xterm.focus();
+        }, 50);
+      }
+    };
+    window.addEventListener('copilot-run-commands', handleRunCommands);
+
+    const handleCustomRunCommands = (e: any) => {
+      if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
+        const commands = e.detail.commands;
+        const commandsStr = Array.isArray(commands) ? commands.join('\n') : commands;
+        socketRef.current.send(JSON.stringify({
+          type: 'copilot_action',
+          action: `custom:${commandsStr}`,
+          session_id: copilotSessionId
+        }));
+        // Delay re-enabling terminal input to prevent key leakage
+        setTimeout(() => {
+          setIsCopilotActive(false);
+          xterm.focus();
+        }, 50);
+      }
+    };
+    window.addEventListener('copilot-custom-run-commands', handleCustomRunCommands);
 
     const handleContinueLoop = (e: any) => {
       if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
@@ -440,6 +562,8 @@ const contextDetail = contextMode === 'LINES'
 
     return () => {
       window.removeEventListener('copilot-external-cancel', handleExternalCancel);
+      window.removeEventListener('copilot-run-commands', handleRunCommands);
+      window.removeEventListener('copilot-custom-run-commands', handleCustomRunCommands);
       window.removeEventListener('copilot-continue-loop', handleContinueLoop);
       clearTimeout(fitTimer);
       resizeObserver.disconnect();
@@ -492,33 +616,37 @@ const contextDetail = contextMode === 'LINES'
       const parts = currentText.split(' ');
       const cmd = parts[0].toLowerCase();
       const args = parts.slice(1).join(' ').trim();
-      const isOneShot = args.length > 0;
-      const requiresArgs = (cmd === '/os' || cmd === '/prompt' || cmd === '/memorize');
+      const hasArgs = args.length > 0;
 
-      if (requiresArgs && !isOneShot) return;
-
-      if (!isOneShot) {
-        if (cmd === '/trust') setTrustMode(true);
-        else if (cmd === '/untrust') setTrustMode(false);
-        else if (cmd === '/architect') setPersona('architect');
-        else if (cmd === '/engineer') setPersona('engineer');
-        else if (cmd === '/os') setOs(args);
-        else if (cmd === '/prompt') setMatchedPrompt(args);
-        else if (cmd === '/memorize' && args) setMemories(prev => [...prev, args]);
+      // Group 1: State-only commands (Always update and return)
+      if (['/os', '/prompt', '/memorize', '/clear'].includes(cmd)) {
+        if (cmd === '/os' && hasArgs) { setOs(args); isUserOverridden.current = true; }
+        else if (cmd === '/prompt' && hasArgs) { setMatchedPrompt(args); isUserOverridden.current = true; }
+        else if (cmd === '/memorize' && hasArgs) setMemories(prev => [...prev, args]);
         else if (cmd === '/clear') {
           setMemories([]);
           setInteractionHistory([]);
         }
         return; 
-      } else {
-        // Handle one-shot commands
-        if (cmd === '/trust') overrideTrust = true;
-        else if (cmd === '/untrust') overrideTrust = false;
-        else if (cmd === '/architect') overridePersona = 'architect';
-        else if (cmd === '/engineer') overridePersona = 'engineer';
-        // Note: For one-shots, we don't currently override /os or /prompt transiently
-        
-        currentText = args;
+      }
+
+      // Group 2: Toggle/Persona commands (State update OR One-shot override)
+      if (['/trust', '/untrust', '/architect', '/engineer'].includes(cmd)) {
+        if (!hasArgs) {
+          // Standalone: Update persistent state and return
+          if (cmd === '/trust') setTrustMode(true);
+          else if (cmd === '/untrust') setTrustMode(false);
+          else if (cmd === '/architect') setPersona('architect');
+          else if (cmd === '/engineer') setPersona('engineer');
+          return;
+        } else {
+          // One-shot: Override for this message and proceed
+          if (cmd === '/trust') { overrideTrust = true; oneShotTrustRef.current = true; }
+          else if (cmd === '/untrust') { overrideTrust = false; oneShotTrustRef.current = false; }
+          else if (cmd === '/architect') overridePersona = 'architect';
+          else if (cmd === '/engineer') overridePersona = 'engineer';
+          currentText = args;
+        }
       }
     }
 
@@ -534,13 +662,18 @@ const contextDetail = contextMode === 'LINES'
         trust: overrideTrust
       };
 
-      socketRef.current.send(JSON.stringify({
+      const aiPayload = {
         type: 'copilot_question',
         question: `${currentText}${memoryContext}${loopContext}`,
         context_buffer: capturedContext,
         node_info_json: JSON.stringify(nodeInfo),
         session_id: copilotSessionId
-      }));
+      };
+
+      console.log("[DEBUG] Sending Request to AI Agent:", aiPayload);
+      console.log("[DEBUG] Node Context for AI:", nodeInfo);
+
+      socketRef.current.send(JSON.stringify(aiPayload));
 
       window.dispatchEvent(new CustomEvent('copilot-message', { 
         detail: { type: 'copilot_question_local', question: currentText, nodeId: nodeId, persona: overridePersona } 

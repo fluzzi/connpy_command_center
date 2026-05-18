@@ -66,18 +66,51 @@ function App() {
       .catch(e => console.error('Failed to fetch AWS info', e));
   }, []);
 
-  // Bridge Terminal Copilot events to the AI Panel
+  // --- Phase 5: Copilot Event Bridge ---
   useEffect(() => {
+    const handleCopilotAction = (e: any) => {
+      const { type, nodeId } = e.detail;
+      const isRun = e.type === 'copilot-run-commands' || e.type === 'copilot-custom-run-commands';
+      const isCancel = e.type === 'copilot-external-cancel';
+
+      if (nodeId) {
+        // Find the latest active confirm thought for this node
+        const latestConfirm = [...thoughts].reverse().find(t => t.nodeId === nodeId && t.type === 'confirm' && !t.status);
+        if (latestConfirm) {
+          sendConfirmation(latestConfirm.id, isRun ? 'y' : 'n');
+        }
+      }
+    };
+
     const handleCopilotMessage = (e: any) => {
       const payload = e.detail;
       const dispatcher = (window as any).terminalCopilotDispatcher;
+      
+      // If the message is an external cancel notification from the server
+      if (payload.type === 'copilot_external_cancel') {
+        const latestConfirm = [...thoughts].reverse().find(t => t.nodeId === payload.nodeId && t.type === 'confirm' && !t.status);
+        if (latestConfirm) {
+           sendConfirmation(latestConfirm.id, 'n');
+        }
+      }
+
       if (dispatcher) {
         dispatcher(payload);
       }
     };
+
     window.addEventListener('copilot-message', handleCopilotMessage);
-    return () => window.removeEventListener('copilot-message', handleCopilotMessage);
-  }, []);
+    window.addEventListener('copilot-run-commands', handleCopilotAction);
+    window.addEventListener('copilot-custom-run-commands', handleCopilotAction);
+    window.addEventListener('copilot-external-cancel', handleCopilotAction);
+
+    return () => {
+      window.removeEventListener('copilot-message', handleCopilotMessage);
+      window.removeEventListener('copilot-run-commands', handleCopilotAction);
+      window.removeEventListener('copilot-custom-run-commands', handleCopilotAction);
+      window.removeEventListener('copilot-external-cancel', handleCopilotAction);
+    };
+  }, [thoughts, sendConfirmation]);
 
   const activeTab = tabs.find(t => t.id === activeTabId);
 

@@ -50,7 +50,6 @@ interface InventoryData {
 }
 
 export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, onOpenSSM, onOpenGraph, workspaceId, ws, selectedProfile, selectedRegion, setSelectedProfile, setSelectedRegion, profiles, regions, onRename }: CloudExplorerProps) {
-  const [isLoadingInfo, setIsLoadingInfo] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -237,7 +236,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
               <select 
                 value={selectedProfile} 
                 onChange={(e) => setSelectedProfile(e.target.value)}
-                disabled={isLoadingInfo || isScanning}
+                disabled={isScanning}
                 className="bg-[#2e3440] appearance-none text-xs font-bold text-[#d8dee9] px-4 py-2 pr-8 outline-none border-r border-[#434c5e] uppercase tracking-wider cursor-pointer disabled:opacity-50"
               >
                 {profiles.length === 0 && <option className="bg-[#2e3440]" value="">NO PROFILES</option>}
@@ -246,7 +245,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
               <select 
                 value={selectedRegion} 
                 onChange={(e) => setSelectedRegion(e.target.value)}
-                disabled={isLoadingInfo || isScanning}
+                disabled={isScanning}
                 className="bg-[#2e3440] appearance-none text-xs font-bold text-[#d8dee9] px-4 py-2 pr-8 outline-none uppercase tracking-wider cursor-pointer disabled:opacity-50"
               >
                 {regions.map(r => <option key={r} className="bg-[#2e3440]" value={r}>{r}</option>)}
@@ -258,7 +257,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
               role="button"
               tabIndex={0}
               onClick={handleScan}
-              className={`flex items-center justify-center gap-2 bg-[#d08770] hover:bg-[#bf616a] text-[#2e3440] px-6 py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.2em] transition-all active:scale-95 shadow-lg shadow-[#d08770]/20 min-w-[140px] outline-none cursor-pointer border-none ${(isLoadingInfo || isScanning || !selectedProfile) ? 'opacity-50 pointer-events-none' : ''}`}
+              className={`flex items-center justify-center gap-2 bg-[#d08770] hover:bg-[#bf616a] text-[#2e3440] px-6 py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.2em] transition-all active:scale-95 shadow-lg shadow-[#d08770]/20 min-w-[140px] outline-none cursor-pointer border-none ${(isScanning || !selectedProfile) ? 'opacity-50 pointer-events-none' : ''}`}
             >
               {isScanning ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />}
               {isScanning ? 'SCANNING...' : 'DISCOVER'}
