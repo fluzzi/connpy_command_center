@@ -41,7 +41,10 @@ async def verify_api_key(api_key: str = Query(None), authorization: str = Header
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return token
 
-GRPC_SERVER_ADDRESS = os.getenv("CONNPY_GRPC_SERVER", "127.0.0.1:8048")
+# Configuration for Connpy Backend
+CONNPY_URL = os.getenv("CONNPY_API_URL", os.getenv("CONNPY_GRPC_SERVER", "127.0.0.1:8048"))
+# Strip protocol for gRPC client compatibility if present
+GRPC_SERVER_ADDRESS = CONNPY_URL.replace("http://", "").replace("https://", "")
 
 @app.get("/api/inventory", dependencies=[Depends(verify_api_key)])
 async def get_inventory():
