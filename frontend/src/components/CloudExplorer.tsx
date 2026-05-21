@@ -17,6 +17,8 @@ interface CloudExplorerProps {
   profiles: string[];
   regions: string[];
   onRename?: (newName: string) => void;
+  autoRun?: boolean;
+  onScanStarted?: (profile: string, region: string) => void;
 }
 
 interface CloudAsset {
@@ -49,7 +51,7 @@ interface InventoryData {
   [key: string]: CloudAsset[] | undefined;
 }
 
-export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, onOpenSSM, onOpenGraph, workspaceId, ws, selectedProfile, selectedRegion, setSelectedProfile, setSelectedRegion, profiles, regions, onRename }: CloudExplorerProps) {
+export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, onOpenSSM, onOpenGraph, workspaceId, ws, selectedProfile, selectedRegion, setSelectedProfile, setSelectedRegion, profiles, regions, onRename, autoRun, onScanStarted }: CloudExplorerProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +81,19 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
     return () => ws.current?.removeEventListener('message', handleWsMessage);
   }, [ws, workspaceId, selectedProfile, selectedRegion]);
 
+  // Clear local inventory when profile or region changes to avoid displaying stale data
+  useEffect(() => {
+    setInventory(null);
+    setError(null);
+  }, [selectedProfile, selectedRegion]);
+
+  // Automatically trigger a silent local scan if the tab meta indicates autoRun is active
+  useEffect(() => {
+    if (autoRun && !inventory && !isScanning && selectedProfile && selectedRegion) {
+      handleScan(true);
+    }
+  }, [autoRun, selectedProfile, selectedRegion, inventory, isScanning]);
+
   const [activeTab, setActiveTab] = useState<keyof InventoryData>('instances');
   const [searchTerm, setSearchTerm] = useState('');
   const [directInspectId, setDirectInspectId] = useState('');
@@ -91,18 +106,22 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleScan = async () => {
+  const handleScan = async (isAutoRun = false) => {
     if (!selectedProfile || !selectedRegion) return;
     setIsScanning(true);
     setError(null);
     setInventory(null);
 
-    if (onRename) {
-      onRename(`${selectedProfile}@${selectedRegion}`);
+    if (!isAutoRun) {
+      if (onScanStarted) {
+        onScanStarted(selectedProfile, selectedRegion);
+      } else if (onRename) {
+        onRename(`${selectedProfile}@${selectedRegion}`);
+      }
     }
 
     // Broadcast scan start
-    if (ws?.current && workspaceId) {
+    if (!isAutoRun && ws?.current && workspaceId) {
         ws.current.send(JSON.stringify({ 
             type: 'aws_discovery_start', 
             profile: selectedProfile, 
@@ -116,7 +135,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
       setInventory(data as InventoryData);
 
       // Broadcast scan complete
-      if (ws?.current && workspaceId) {
+      if (!isAutoRun && ws?.current && workspaceId) {
           ws.current.send(JSON.stringify({ 
               type: 'aws_discovery_complete', 
               inventory: data,
@@ -127,7 +146,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
     } catch (e: unknown) {
       const errorMsg = e instanceof Error ? e.message : 'An unknown error occurred during AWS discovery.';
       setError(errorMsg);
-      if (ws?.current && workspaceId) {
+      if (!isAutoRun && ws?.current && workspaceId) {
           ws.current.send(JSON.stringify({ 
               type: 'aws_discovery_complete', 
               error: errorMsg,
@@ -256,7 +275,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
             <div
               role="button"
               tabIndex={0}
-              onClick={handleScan}
+              onClick={() => handleScan(false)}
               className={`flex items-center justify-center gap-2 bg-[#d08770] hover:bg-[#bf616a] text-[#2e3440] px-6 py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.2em] transition-all active:scale-95 shadow-lg shadow-[#d08770]/20 min-w-[140px] outline-none cursor-pointer border-none ${(isScanning || !selectedProfile) ? 'opacity-50 pointer-events-none' : ''}`}
             >
               {isScanning ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />}

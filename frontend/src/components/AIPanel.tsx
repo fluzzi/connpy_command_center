@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { clsx } from 'clsx';
 import { Cpu, X, Zap, Send, Square, RotateCcw, Check, Ban, Activity, ChevronDown, ChevronUp, Bot, User, Settings, Globe, Terminal as TerminalIcon, Play, Edit, CheckSquare, List } from 'lucide-react';
 import { SmartText } from './SmartText';
+import { api } from '../api';
 import type { AiThought } from '../types';
 
 // --- SUB-COMPONENTS FOR PHASE 5 ---
@@ -30,7 +31,6 @@ function CopilotActionCard({ thought, onRun, onRunCustom, onCancel, onEdit, isLa
   }
 
   const commands: string[] = data.commands || [];
-  const guide: string = data.guide || "";
   const risk: string = data.risk_level || "low";
   
   const [selectedIndices, setSelectedIndices] = useState<number[]>(commands.map((_, i) => i));
@@ -372,9 +372,20 @@ export default function AIPanel({
     }, [activeNodeId, thoughts]);
 
     const handleSend = () => {
-    const sessionId = workspaceId || 'web-session';
+    const sessionId = workspaceId || api.getActiveSessionId();
     const sent = onSendPrompt(aiInput.trim(), sessionId);
     if (sent) setAiInput('');
+  };
+
+  const handleReload = () => {
+    if (activeTab === 'global' && !workspaceId) {
+      if (confirm('Are you sure you want to start a new chat? This will clear the current session.')) {
+        localStorage.removeItem('active_ai_session');
+        window.location.reload();
+      }
+    } else {
+      onClearThoughts(activeTab);
+    }
   };
 
   const smartTextProps = {
@@ -508,7 +519,7 @@ export default function AIPanel({
           <span className="font-black text-[10px] uppercase tracking-[0.2em] text-[#81a1c1]">Tactical Insight</span>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={() => onClearThoughts(activeTab)} className="p-2 bg-transparent border-none outline-none hover:bg-white/5 hover:text-[#d8dee9] text-[#d8dee9]/60 transition-colors rounded-md"><RotateCcw size={14} /></button>
+          <button onClick={handleReload} className="p-2 bg-transparent border-none outline-none hover:bg-white/5 hover:text-[#d8dee9] text-[#d8dee9]/60 transition-colors rounded-md"><RotateCcw size={14} /></button>
           <button onClick={onClose} className="p-2 bg-transparent border-none outline-none hover:bg-white/5 hover:text-[#d8dee9] text-[#d8dee9]/60 transition-colors rounded-md"><X size={16} /></button>
         </div>
       </div>

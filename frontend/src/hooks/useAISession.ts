@@ -59,8 +59,6 @@ export function useAISession(workspaceId: string | null) {
         }
 
         setThoughts(prev => {
-          const type = hasCommands ? 'confirm' : (currentResponderRef.current || 'engineer');
-          
           // Optimization: If the last thought was a streamed guide for this node, 
           // we update it with the final guide text, but keep it as a normal AI message.
           const last = prev[prev.length - 1];

@@ -12,7 +12,7 @@ import { api } from './api';
 import { useAISession } from './hooks/useAISession';
 import { useWorkspace } from './hooks/useWorkspace';
 import TopologyViewer from './components/TopologyViewer';
-import { X, Terminal as TerminalIcon, Layout, Monitor, Users, Globe, Cloud, Cpu, BookOpen, Copy, RefreshCw, Pencil, Activity } from 'lucide-react';
+import { X, Terminal as TerminalIcon, Layout, Monitor, Users, Globe, Cloud, Cpu, BookOpen, Copy, RefreshCw, Pencil, Activity, Check } from 'lucide-react';
 import type { Tab } from './types';
 
 function App() {
@@ -20,6 +20,7 @@ function App() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showAiPanel, setShowAiPanel] = useState(true);
   const [activeAiTab, setActiveAiTab] = useState<'global' | 'terminal'>('global');
+  const [copiedId, setCopiedId] = useState(false);
 
   // Global AWS Context (shared with CloudExplorer)
   const [selectedProfile, setSelectedProfile] = useState('');
@@ -69,9 +70,8 @@ function App() {
   // --- Phase 5: Copilot Event Bridge ---
   useEffect(() => {
     const handleCopilotAction = (e: any) => {
-      const { type, nodeId } = e.detail;
+      const { nodeId } = e.detail;
       const isRun = e.type === 'copilot-run-commands' || e.type === 'copilot-custom-run-commands';
-      const isCancel = e.type === 'copilot-external-cancel';
 
       if (nodeId) {
         // Find the latest active confirm thought for this node
@@ -415,13 +415,31 @@ function App() {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={() => toggleWorkspace(tabs, clearThoughts)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-all ${workspaceId ? 'bg-[#a3be8c]/20 border-[#a3be8c]/50 text-[#a3be8c] shadow-[0_0_10px_rgba(163,190,140,0.1)]' : 'bg-[#3b4252] border-[#5e81ac]/40 text-[#81a1c1]/60 hover:border-[#81a1c1]/30'}`}
-            >
-              <Users size={14} />
-              <span className="text-[10px] font-black uppercase tracking-widest">{workspaceId ? `Co-Op [${workspaceId}]` : 'Multiplayer'}</span>
-            </button>
+            <div className="flex items-center">
+              <button
+                onClick={() => toggleWorkspace(tabs, clearThoughts)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-all ${workspaceId ? 'bg-[#a3be8c]/20 border-[#a3be8c]/50 text-[#a3be8c] shadow-[0_0_10px_rgba(163,190,140,0.1)] rounded-r-none border-r-0' : 'bg-[#3b4252] border-[#5e81ac]/40 text-[#81a1c1]/60 hover:border-[#81a1c1]/30'}`}
+              >
+                <Users size={14} />
+                <span className="text-[10px] font-black uppercase tracking-widest">{workspaceId ? `Co-Op [${workspaceId}]` : 'Multiplayer'}</span>
+              </button>
+              {workspaceId && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (navigator.clipboard && workspaceId) {
+                      navigator.clipboard.writeText(workspaceId);
+                      setCopiedId(true);
+                      setTimeout(() => setCopiedId(false), 2000);
+                    }
+                  }}
+                  className="px-2 py-1.5 rounded-md rounded-l-none border border-l-0 border-[#a3be8c]/50 bg-[#a3be8c]/20 text-[#a3be8c] hover:bg-[#a3be8c]/30 transition-all flex items-center justify-center"
+                  title="Copy Session ID"
+                >
+                  {copiedId ? <Check size={14} /> : <Copy size={14} />}
+                </button>
+              )}
+            </div>
             <button
               onClick={() => setShowAiPanel(!showAiPanel)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-all ${showAiPanel ? 'bg-[#81a1c1]/20 border-[#81a1c1]/50 text-[#81a1c1] shadow-[0_0_10px_rgba(129,161,193,0.1)]' : 'bg-[#3b4252] border-[#81a1c1] text-[#81a1c1] hover:border-[#81a1c1]/30'}`}
@@ -468,16 +486,25 @@ function App() {
                       profiles={profiles}
                       regions={regions}
                       setSelectedProfile={(p) => {
-                        const newTabs = tabs.map(t => t.id === tab.id ? { ...t, meta: { ...t.meta, profile: p } } : t);
+                        const newTabs = tabs.map(t => t.id === tab.id ? { ...t, meta: { ...t.meta, profile: p, autoRun: 'false' } } : t);
                         updateTabsAndPush(newTabs);
                         setSelectedProfile(p);
                       }}
                       setSelectedRegion={(r) => {
-                        const newTabs = tabs.map(t => t.id === tab.id ? { ...t, meta: { ...t.meta, region: r } } : t);
+                        const newTabs = tabs.map(t => t.id === tab.id ? { ...t, meta: { ...t.meta, region: r, autoRun: 'false' } } : t);
                         updateTabsAndPush(newTabs);
                         setSelectedRegion(r);
                       }}
                       onRename={(newName) => handleRenameSubmit(tab.id, newName)}
+                      autoRun={tab.meta?.autoRun === 'true'}
+                      onScanStarted={(p, r) => {
+                        const newTabs = tabs.map(t => t.id === tab.id ? {
+                          ...t,
+                          customName: `${p}@${r}`,
+                          meta: { ...t.meta, profile: p, region: r, autoRun: 'true' }
+                        } : t);
+                        updateTabsAndPush(newTabs);
+                      }}
                     />
                   ) : tab.type === 'playbook_editor' ? (
                     <PlaybookEditor onRun={handleOpenPlaybookResult} availableNodes={availableNodes} />

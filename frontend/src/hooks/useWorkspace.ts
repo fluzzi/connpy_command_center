@@ -24,7 +24,7 @@ export function useWorkspace(_tabs: Tab[], setTabs: React.Dispatch<React.SetStat
         if ((data.type === 'tabs_sync' || data.type === 'update_tabs') && Array.isArray(data.tabs)) {
           setTabs(prev => {
             return data.tabs.map((tab: Tab) => {
-              const existing = prev.find(t => t.id === tab.id || t.nodeId === tab.nodeId);
+              const existing = prev.find(t => t.id === tab.id);
               return existing ? { ...existing, ...tab } : tab;
             });
           });
@@ -57,13 +57,38 @@ export function useWorkspace(_tabs: Tab[], setTabs: React.Dispatch<React.SetStat
       const input = window.prompt('Join an existing session ID, or leave blank to host a new session:');
       if (input === null) return;
       setThoughts();
-      if (input.trim() === '') {
-        const newId = 'WS-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+      
+      const userInput = input.trim();
+      if (userInput === '') {
+        // Hosting a new session with automatic chronological ID
+        const now = new Date();
+        const ts = now.getFullYear() +
+                   String(now.getMonth() + 1).padStart(2, '0') +
+                   String(now.getDate()).padStart(2, '0') + "-" +
+                   String(now.getHours()).padStart(2, '0') +
+                   String(now.getMinutes()).padStart(2, '0') +
+                   String(now.getSeconds()).padStart(2, '0');
+        const random = Math.random().toString(36).substring(2, 6);
+        const newId = `coop-${ts}-${random}`.toUpperCase();
+        
+        setWorkspaceId(newId);
+        setTimeout(() => pushTabsUpdate(currentTabs), 500);
+      } else if (userInput.length < 10 && !userInput.startsWith('COOP-')) {
+        // If it looks like a "friendly name" and not a full ID, we wrap it
+        const now = new Date();
+        const ts = now.getFullYear() +
+                   String(now.getMonth() + 1).padStart(2, '0') +
+                   String(now.getDate()).padStart(2, '0') + "-" +
+                   String(now.getHours()).padStart(2, '0') +
+                   String(now.getMinutes()).padStart(2, '0');
+        const newId = `COOP-${ts}-${userInput.replace(/\s+/g, '-')}`.toUpperCase();
+        
         setWorkspaceId(newId);
         setTimeout(() => pushTabsUpdate(currentTabs), 500);
       } else {
+        // It's likely a full ID for joining
         setTabs([]);
-        setWorkspaceId(input.trim().toUpperCase());
+        setWorkspaceId(userInput.toUpperCase());
       }
     }
   };

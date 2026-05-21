@@ -39,6 +39,9 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   const contextModeRef = useRef(contextMode);
   useEffect(() => { contextModeRef.current = contextMode; }, [contextMode]);
 
+  const [visualCommandMarkers, setVisualCommandMarkers] = useState<{pos: number, marker: any}[]>([]);
+  const lastEnterRef = useRef<{ line: number, time: number } | null>(null);
+
   const [persona, setPersona] = useState<Persona>('engineer');
   const [trustMode, setTrustMode] = useState(false);
   const trustModeRef = useRef(trustMode);
@@ -102,39 +105,44 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
       let lastSearchLine = totalLines - 1;
       
       const reversedBlocks = [...remoteBlocks].reverse();
-      for (const [idx, block] of reversedBlocks.entries()) {
+      for (const block of reversedBlocks) {
         let startLine = -1;
         let endLine = lastSearchLine + 1;
-        const targetPreview = stripAnsi(block.startPreview).trim();
         
-        // Find start line by searching for startPreview (normalized)
-        // Note: xterm.js might split long commands across multiple physical lines if the terminal is narrow.
-        // To fix this, we normalize all internal whitespace in the preview.
-        const normalizedTarget = targetPreview.replace(/\s+/g, '');
-        
-        for (let i = lastSearchLine; i >= 0; i--) {
-          const rawLine = buffer.getLine(i)?.translateToString(true) || '';
-          const cleanLine = stripAnsi(rawLine).trim();
+        // Try to find the line using our visual command markers first (OSC 133)
+        const matchingMarker = visualCommandMarkers.find(m => m.pos === block.startPos);
+        if (matchingMarker && matchingMarker.marker && !matchingMarker.marker.isDisposed && matchingMarker.marker.line !== -1) {
+          startLine = matchingMarker.marker.line;
+          lastSearchLine = startLine - 1;
+        } else {
+          // Fallback to text search
+          const targetPreview = stripAnsi(block.startPreview).trim();
+          const normalizedTarget = targetPreview.replace(/\s+/g, '');
           
-          // Fast path: Exact match on single line
-          if (cleanLine.includes(targetPreview)) {
-            startLine = i;
-            lastSearchLine = i - 1;
-            break;
-          }
-          
-          // Slow path: Check if the preview spans across this line and the next line(s)
-          // Combine up to 3 lines (current and 2 below) to catch wrapped text safely
-          const line0 = stripAnsi(buffer.getLine(i)?.translateToString(true) || '');
-          const line1 = i + 1 < buffer.length ? stripAnsi(buffer.getLine(i+1)?.translateToString(true) || '') : '';
-          const line2 = i + 2 < buffer.length ? stripAnsi(buffer.getLine(i+2)?.translateToString(true) || '') : '';
-          
-          const combinedClean = (line0 + line1 + line2).replace(/\s+/g, '');
-          
-          if (combinedClean.includes(normalizedTarget)) {
+          for (let i = lastSearchLine; i >= 0; i--) {
+            const rawLine = buffer.getLine(i)?.translateToString(true) || '';
+            const cleanLine = stripAnsi(rawLine).trim();
+            
+            // Fast path: Exact match on single line
+            if (cleanLine.includes(targetPreview)) {
               startLine = i;
               lastSearchLine = i - 1;
               break;
+            }
+            
+            // Slow path: Check if the preview spans across this line and the next line(s)
+            // Combine up to 3 lines (current and 2 below) to catch wrapped text safely
+            const line0 = stripAnsi(buffer.getLine(i)?.translateToString(true) || '');
+            const line1 = i + 1 < buffer.length ? stripAnsi(buffer.getLine(i+1)?.translateToString(true) || '') : '';
+            const line2 = i + 2 < buffer.length ? stripAnsi(buffer.getLine(i+2)?.translateToString(true) || '') : '';
+            
+            const combinedClean = (line0 + line1 + line2).replace(/\s+/g, '');
+            
+            if (combinedClean.includes(normalizedTarget)) {
+                startLine = i;
+                lastSearchLine = i - 1;
+                break;
+            }
           }
         }
 
@@ -186,10 +194,6 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     const text = xtermRef.current.buffer.active.getLine(startLine)?.translateToString(true).trim() || '';
     return text;
   };
-
-  const currentBlockText = (contextMode === 'SINGLE' || contextMode === 'RANGE') 
-    ? getBlockPreview(contextBlocks) 
-    : '';
 
   const { ctxStart, ctxEnd } = React.useMemo(() => {
     if (!xtermRef.current) return { ctxStart: 0, ctxEnd: 0 };
@@ -276,11 +280,47 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     }
   }, [ctxStart, showCopilot]);
 
-const contextDetail = contextMode === 'LINES' 
+  const cleanPreview = (text: string) => {
+    const original = text.trim().replace(/\r/g, '').replace(/\n/g, ' ');
+    const cleaned = original.replace(/^.*?[#>\$]\s*/, '');
+    return cleaned ? cleaned : original;
+  };
+
+  const getCombinedRangePreview = () => {
+    if (!xtermRef.current || blockIndices.length === 0) return '';
+    const startIndex = Math.max(0, blockIndices.length - contextBlocks);
+    let slice = blockIndices.slice(startIndex);
+    
+    if (slice.length > 1) {
+      slice = slice.slice(0, -1);
+    }
+    
+    const previews: string[] = [];
+    const buffer = xtermRef.current.buffer.active;
+    
+    for (const [startLine] of slice) {
+      const lineText = buffer.getLine(startLine)?.translateToString(true).trim() || '';
+      const cleaned = cleanPreview(lineText);
+      if (cleaned) {
+        const truncated = cleaned.length > 25 ? cleaned.substring(0, 22) + "..." : cleaned;
+        previews.push(truncated);
+      }
+    }
+    
+    if (previews.length === 0) {
+      return cleanPreview(getBlockPreview(contextBlocks));
+    } else if (previews.length <= 3) {
+      return previews.join(" + ");
+    } else {
+      return `${previews[0]} + ${previews[1]} + ${previews[2]} ... (+${previews.length - 3})`;
+    }
+  };
+
+  const contextDetail = contextMode === 'LINES' 
     ? `${Math.min(contextLines, effectiveEnd)} (${Math.min(100, Math.round((contextLines/(effectiveEnd||1))*100))}%)` 
     : contextMode === 'SINGLE' 
-      ? `${contextBlocks} (${ctxEnd - ctxStart}L~): ${currentBlockText}`
-      : `${contextBlocks} (${ctxEnd - ctxStart}L~): ${currentBlockText}`;
+      ? `${contextBlocks} (${ctxEnd - ctxStart}L~): ${cleanPreview(getBlockPreview(contextBlocks))}`
+      : `${contextBlocks} (${ctxEnd - ctxStart}L~): ${getCombinedRangePreview()}`;
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -288,6 +328,8 @@ const contextDetail = contextMode === 'LINES'
     if (xtermRef.current) {
         xtermRef.current.dispose();
     }
+
+    setVisualCommandMarkers([]);
 
     const xterm = new XTerm({
       cursorBlink: true,
@@ -324,6 +366,58 @@ const contextDetail = contextMode === 'LINES'
     
     xtermRef.current = xterm;
     fitAddonRef.current = fitAddon;
+
+    const keyDisposable = xterm.onKey((e) => {
+      if (e.domEvent.key === 'Enter') {
+        lastEnterRef.current = {
+          line: xterm.buffer.active.baseY + xterm.buffer.active.cursorY,
+          time: Date.now()
+        };
+      }
+    });
+
+    // Register OSC 133 handler for command execution boundaries
+    xterm.parser.registerOscHandler(133, (data) => {
+      const parts = data.split(';');
+      if (parts[0] === 'B') {
+        const pos = parts[1] ? parseInt(parts[1], 10) : null;
+        if (pos !== null && !isNaN(pos)) {
+          const buffer = xterm.buffer.active;
+          const absCursorLine = buffer.baseY + buffer.cursorY;
+          let commandLine = absCursorLine;
+          
+          const now = Date.now();
+          if (lastEnterRef.current !== null && (now - lastEnterRef.current.time) < 1000) {
+            commandLine = lastEnterRef.current.line;
+            lastEnterRef.current = null;
+          } else {
+            // Search upwards to find the non-empty line where the command prompt/text resides
+            for (let i = absCursorLine; i >= 0; i--) {
+              const lineText = buffer.getLine(i)?.translateToString(true).trim() || '';
+              if (lineText !== '') {
+                commandLine = i;
+                break;
+              }
+            }
+          }
+          
+          const marker = xterm.registerMarker(commandLine - absCursorLine);
+          if (marker) {
+            setVisualCommandMarkers(prev => {
+              if (prev.some(m => m.pos === pos)) return prev;
+              const next = [...prev, { pos, marker }];
+              if (next.length > 100) {
+                const oldest = next[0];
+                try { oldest.marker.dispose(); } catch (e) { /* already disposed */ }
+                return next.slice(1);
+              }
+              return next;
+            });
+          }
+        }
+      }
+      return true;
+    });
 
     xterm.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown') {
@@ -565,6 +659,7 @@ const contextDetail = contextMode === 'LINES'
       window.removeEventListener('copilot-run-commands', handleRunCommands);
       window.removeEventListener('copilot-custom-run-commands', handleCustomRunCommands);
       window.removeEventListener('copilot-continue-loop', handleContinueLoop);
+      keyDisposable.dispose();
       clearTimeout(fitTimer);
       resizeObserver.disconnect();
       socket.close();

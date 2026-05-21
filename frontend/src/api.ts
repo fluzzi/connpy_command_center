@@ -16,6 +16,27 @@ const headers = {
 };
 
 export const api = {
+    generateSessionId: () => {
+        const now = new Date();
+        const ts = now.getFullYear() +
+                   String(now.getMonth() + 1).padStart(2, '0') +
+                   String(now.getDate()).padStart(2, '0') + "-" +
+                   String(now.getHours()).padStart(2, '0') +
+                   String(now.getMinutes()).padStart(2, '0') +
+                   String(now.getSeconds()).padStart(2, '0');
+        const random = Math.random().toString(36).substring(2, 6);
+        return `web-${ts}-${random}`;
+    },
+
+    getActiveSessionId: () => {
+        let currentSessionId = localStorage.getItem('active_ai_session');
+        if (!currentSessionId) {
+            currentSessionId = api.generateSessionId();
+            localStorage.setItem('active_ai_session', currentSessionId);
+        }
+        return currentSessionId;
+    },
+
     getInventory: () => fetch(`${API_BASE}/api/inventory`, { headers }).then(r => r.json()),
     
     getNodeDetails: (nodeId: string) => fetch(`${API_BASE}/api/node/${encodeURIComponent(nodeId)}`, { headers }).then(r => r.json()),
@@ -67,9 +88,11 @@ export const api = {
         const base = api.getWsBaseUrl();
         const url = new URL(`${base}/ws/ai`);
         url.searchParams.append('api_key', API_KEY);
-        if (workspaceId) {
-            url.searchParams.append('session_id', workspaceId);
-        }
+        
+        // Use workspaceId if in co-op mode, otherwise use persistent local session
+        const sessionId = workspaceId || api.getActiveSessionId();
+        url.searchParams.append('session_id', sessionId);
+        
         return url.toString();
     },
 
