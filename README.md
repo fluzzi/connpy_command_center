@@ -71,4 +71,4 @@ python command_center.py --dev
 
 ## 📜 License
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE)
