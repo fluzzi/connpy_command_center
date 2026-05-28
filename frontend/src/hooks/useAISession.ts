@@ -33,8 +33,8 @@ export function useAISession(workspaceId: string | null) {
           }
           return [...prev, { id: Math.random().toString(36), type: currentResponderRef.current, content: payload.chunk, timestamp: new Date(), nodeId }];
         });
-      } else if (payload.type === 'copilot_question_local') {
-        // User sent a question from terminal phantom input
+      } else if (payload.type === 'copilot_question_local' || payload.type === 'copilot_question_remote') {
+        // User sent a question from terminal phantom input (local or broadcasted remote)
         setIsAiProcessing(true);
         if (payload.persona === 'architect' || payload.persona === 'engineer') {
           currentResponderRef.current = payload.persona;
@@ -143,6 +143,19 @@ export function useAISession(workspaceId: string | null) {
 
         if (data.is_operator) {
           setThoughts(prev => [...prev, { id: Math.random().toString(36), type: 'text', content: data.content, timestamp: new Date() }]);
+          return;
+        }
+
+        if (data.confirmation_resolved) {
+          // Another user in the shared session resolved the confirmation — dismiss all pending locally.
+          // Covers both: global AI (requires_confirmation=true) and terminal copilot action cards (type='confirm', no status)
+          const resolvedStatus = data.answer === 'y' ? 'authorized' : 'denied';
+          setThoughts(prev => prev.map(t => {
+            if (t.requires_confirmation || (t.type === 'confirm' && !t.status)) {
+              return { ...t, requires_confirmation: false, status: resolvedStatus };
+            }
+            return t;
+          }));
           return;
         }
 

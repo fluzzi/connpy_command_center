@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Terminal, ChevronDown, ChevronRight, Network, Folder, Search, Database, MoreVertical, Cloud, BookOpen } from 'lucide-react';
-import { api } from '../api';
+import { api, API_BASE } from '../api';
 
 interface SidebarProps {
   onSelectNode: (nodeId: string) => void;
@@ -93,6 +93,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSelectNode, activeNodeId, onCloudEx
   const [expandedFolders, setFoldersExpanded] = useState<Record<string, boolean>>({});
   const [searchTerm, setSearchText] = useState('');
   const [isAwsEnabled, setIsAwsEnabled] = useState(false);
+  const [version, setVersion] = useState<string>('...');
 
   useEffect(() => {
     const fetchData = async () => {
@@ -112,6 +113,16 @@ const Sidebar: React.FC<SidebarProps> = ({ onSelectNode, activeNodeId, onCloudEx
         }
       } catch (e) {
         // AWS plugin not available or network error
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/version`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.version) setVersion('v' + data.version);
+        }
+      } catch (e) {
+        // version endpoint not available
       }
     };
     fetchData();
@@ -344,7 +355,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSelectNode, activeNodeId, onCloudEx
             <div className="w-2 h-2 rounded-full bg-[#a3be8c] animate-pulse shadow-[0_0_8px_#a3be8c]" />
             <span className="text-[10px] font-bold text-[#a3be8c] uppercase tracking-[0.1em]">Engine Online</span>
           </div>
-          <span className="text-[10px] font-mono text-[#81a1c1]">v6.0.0b3</span>
+          <span className="text-[10px] font-mono text-[#81a1c1]">{version}</span>
         </div>
         
         <div className="flex items-center justify-between px-4 py-3 bg-[#2e3440]/50 rounded-xl border border-[#3b4252]/50 transition-all">

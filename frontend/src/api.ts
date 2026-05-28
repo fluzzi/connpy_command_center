@@ -7,7 +7,7 @@ const getApiPort = () => {
     return window.location.port;
 };
 
-const API_BASE = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}${getApiPort() ? ':' + getApiPort() : ''}`;
+export const API_BASE = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}${getApiPort() ? ':' + getApiPort() : ''}`;
 export const API_KEY = import.meta.env.VITE_API_KEY || 'connpy-dev-key-12345';
 
 export const getHeaders = () => {

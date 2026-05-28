@@ -11,9 +11,9 @@ interface CloudInspectProps {
   onClose: () => void;
   onOpenInspect: (assetId: string, profile: string, region: string) => void;
   onOpenFlowLog: (eniId: string, flId: string, profile: string, region: string) => void;
-  onOpenConsole?: (instanceId: string, profile: string, region: string) => void;
-  onOpenSSM?: (instanceId: string, profile: string, region: string) => void;
-  onOpenGraph?: (identifier: string, metricType: 'bw' | 'pps', profile: string, region: string) => void;
+  onOpenConsole?: (instanceId: string, profile: string, region: string, name?: string) => void;
+  onOpenSSM?: (instanceId: string, profile: string, region: string, name?: string) => void;
+  onOpenGraph?: (identifier: string, metricType: 'bw' | 'pps', profile: string, region: string, name?: string) => void;
   onOpenNode?: (node: string) => void;
 }
 
@@ -37,6 +37,18 @@ export default function CloudInspect({
   const isRouteTable = assetIdLower.startsWith('rtb-') || assetIdLower.startsWith('tgw-rtb-') || assetIdLower.startsWith('lgw-rtb-');
   const isPrefixList = assetIdLower.includes('pl-');
   const isInstance = assetIdLower.startsWith('i-');
+
+  const getNameFromYaml = () => {
+    if (!data) return undefined;
+    const lines = data.split('\n');
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (cleanLine.toLowerCase().startsWith('name:')) {
+        return cleanLine.substring(5).trim();
+      }
+    }
+    return undefined;
+  };
 
   const fetchAwsInfo = async () => {
     try {
@@ -268,7 +280,7 @@ export default function CloudInspect({
             <div
               role="button"
               tabIndex={0}
-              onClick={() => onOpenConsole(localAssetId, localProfile, localRegion)}
+              onClick={() => onOpenConsole(localAssetId, localProfile, localRegion, getNameFromYaml())}
               className="appearance-none flex items-center gap-2 bg-[#81a1c1]/20 hover:bg-[#81a1c1]/40 text-[#81a1c1] px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 cursor-pointer outline-none"
               title="Launch Console"
             >
@@ -279,7 +291,7 @@ export default function CloudInspect({
             <div
               role="button"
               tabIndex={0}
-              onClick={() => onOpenSSM(localAssetId, localProfile, localRegion)}
+              onClick={() => onOpenSSM(localAssetId, localProfile, localRegion, getNameFromYaml())}
               className="appearance-none flex items-center gap-2 bg-[#a3be8c]/20 hover:bg-[#a3be8c]/40 text-[#a3be8c] px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 cursor-pointer outline-none"
               title="Launch SSM"
             >
@@ -291,7 +303,7 @@ export default function CloudInspect({
                 <div
                   role="button"
                   tabIndex={0}
-                  onClick={() => onOpenGraph(localAssetId, 'bw', localProfile, localRegion)}
+                  onClick={() => onOpenGraph(localAssetId, 'bw', localProfile, localRegion, getNameFromYaml())}
                   className="appearance-none flex items-center gap-2 bg-[#b48ead]/20 hover:bg-[#b48ead]/40 text-[#b48ead] px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 cursor-pointer outline-none"
                   title="Bandwidth Utilization"
                 >
@@ -300,7 +312,7 @@ export default function CloudInspect({
                 <div
                   role="button"
                   tabIndex={0}
-                  onClick={() => onOpenGraph(localAssetId, 'pps', localProfile, localRegion)}
+                  onClick={() => onOpenGraph(localAssetId, 'pps', localProfile, localRegion, getNameFromYaml())}
                   className="appearance-none flex items-center gap-2 bg-[#d08770]/20 hover:bg-[#d08770]/40 text-[#d08770] px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 cursor-pointer outline-none"
                   title="Packets Per Second"
                 >

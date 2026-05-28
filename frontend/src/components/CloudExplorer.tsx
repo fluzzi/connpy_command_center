@@ -5,9 +5,9 @@ import { api } from '../api';
 interface CloudExplorerProps {
   onClose: () => void;
   onOpenInspect: (assetId: string, profile: string, region: string) => void;
-  onOpenConsole?: (instanceId: string, profile: string, region: string) => void;
-  onOpenSSM?: (instanceId: string, profile: string, region: string) => void;
-  onOpenGraph?: (identifier: string, metricType: 'bw' | 'pps', profile: string, region: string) => void;
+  onOpenConsole?: (instanceId: string, profile: string, region: string, name?: string) => void;
+  onOpenSSM?: (instanceId: string, profile: string, region: string, name?: string) => void;
+  onOpenGraph?: (identifier: string, metricType: 'bw' | 'pps', profile: string, region: string, name?: string) => void;
   workspaceId?: string | null;
   ws?: React.MutableRefObject<WebSocket | null>;
   selectedProfile: string;
@@ -502,7 +502,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
                                   <div
                                     role="button"
                                     tabIndex={0}
-                                    onClick={() => onOpenConsole(item.id, selectedProfile, selectedRegion)}
+                                    onClick={() => onOpenConsole(item.id, selectedProfile, selectedRegion, item.name)}
                                     className="flex items-center justify-center gap-2 bg-[#81a1c1]/20 hover:bg-[#81a1c1]/40 text-[#81a1c1] px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 w-fit cursor-pointer outline-none"
                                   >
                                     <TerminalIcon size={12} /> Console
@@ -512,7 +512,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
                                   <div
                                     role="button"
                                     tabIndex={0}
-                                    onClick={() => onOpenSSM(item.id, selectedProfile, selectedRegion)}
+                                    onClick={() => onOpenSSM(item.id, selectedProfile, selectedRegion, item.name)}
                                     className="flex items-center justify-center gap-2 bg-[#a3be8c]/20 hover:bg-[#a3be8c]/40 text-[#a3be8c] px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 w-fit cursor-pointer outline-none"
                                   >
                                     <TerminalIcon size={12} /> SSM
@@ -523,7 +523,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
                                       <div
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => onOpenGraph(item.id, 'bw', selectedProfile, selectedRegion)}
+                                        onClick={() => onOpenGraph(item.id, 'bw', selectedProfile, selectedRegion, item.name)}
                                         className="flex items-center justify-center gap-1 bg-[#b48ead]/10 hover:bg-[#b48ead]/30 text-[#b48ead] px-2 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 w-fit cursor-pointer outline-none"
                                       >
                                         <BarChart2 size={12} /> BW
@@ -531,7 +531,7 @@ export default function CloudExplorer({ onClose, onOpenInspect, onOpenConsole, o
                                       <div
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => onOpenGraph(item.id, 'pps', selectedProfile, selectedRegion)}
+                                        onClick={() => onOpenGraph(item.id, 'pps', selectedProfile, selectedRegion, item.name)}
                                         className="flex items-center justify-center gap-1 bg-[#d08770]/10 hover:bg-[#d08770]/30 text-[#d08770] px-2 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest border border-transparent transition-all active:scale-95 w-fit cursor-pointer outline-none"
                                       >
                                         <BarChart2 size={12} /> PPS

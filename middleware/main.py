@@ -7,14 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import grpc
 from typing import AsyncGenerator, Dict, Set
 
-# Add connpy root to sys.path to import its proto/grpc modules
-for mod in list(sys.modules.keys()):
-    if mod == "connpy" or mod.startswith("connpy."):
-        sys.modules.pop(mod, None)
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../connpy")))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
 from connpy.grpc_layer import connpy_pb2, connpy_pb2_grpc, remote_plugin_pb2, remote_plugin_pb2_grpc
 from google.protobuf.json_format import MessageToDict
 
@@ -63,6 +55,11 @@ async def verify_api_key(api_key: str = Query(None), authorization: str = Header
 CONNPY_URL = os.getenv("CONNPY_API_URL", os.getenv("CONNPY_GRPC_SERVER", "127.0.0.1:8048"))
 # Strip protocol for gRPC client compatibility if present
 GRPC_SERVER_ADDRESS = CONNPY_URL.replace("http://", "").replace("https://", "")
+
+@app.get("/api/version")
+async def get_version():
+    from connpy._version import __version__
+    return {"version": __version__}
 
 @app.get("/api/auth/status")
 async def get_auth_status():
@@ -693,6 +690,24 @@ async def ai_websocket_endpoint(websocket: WebSocket):
                     for c in dead_clients:
                         session['clients'].remove(c)
                 
+                elif "confirmation_answer" in data:
+                    # Broadcast confirmation resolution to all other clients so they
+                    # dismiss their pending confirmation UI (multiplayer sync fix)
+                    answer = data["confirmation_answer"]
+                    resolved_msg = {
+                        "confirmation_resolved": True,
+                        "answer": answer  # 'y' = authorized, 'n' = denied
+                    }
+                    dead_clients = set()
+                    for client in session['clients']:
+                        if client != websocket:
+                            try:
+                                await client.send_json(resolved_msg)
+                            except Exception:
+                                dead_clients.add(client)
+                    for c in dead_clients:
+                        session['clients'].remove(c)
+                
                 await session['input_queue'].put(data)
         except WebSocketDisconnect:
             pass
@@ -895,10 +910,15 @@ class SharedTerminalManager:
         key = f"{session_id}::{node_id}"
         async with self.lock:
             if key not in self.sessions:
-                owner_token = None
+                tab_owner_token = None
                 if session_id in workspace_manager.sessions:
-                    owner_token = workspace_manager.sessions[session_id].get("owner_token")
-                effective_token = owner_token or token
+                    tabs = workspace_manager.sessions[session_id].get("tabs", [])
+                    for tab in tabs:
+                        if isinstance(tab, dict) and tab.get("nodeId") == node_id:
+                            tab_owner_token = tab.get("ownerToken")
+                            if tab_owner_token:
+                                break
+                effective_token = tab_owner_token or token
 
                 channel = grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS)
                 stub = connpy_pb2_grpc.NodeServiceStub(channel)
@@ -1073,6 +1093,8 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
         try:
             while True:
                 msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
                 if "bytes" in msg:
                     await session['input_queue'].put(msg["bytes"])
                 elif "text" in msg:
@@ -1083,6 +1105,24 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
                         if data.get("type") in ("copilot_question", "copilot_action"):
                             # Wrap in custom object that shared generator can distinguish
                             await session['input_queue'].put(msg["text"])
+                            
+                            # Broadcast the question to other clients for co-op visibility
+                            if data.get("type") == "copilot_question":
+                                broadcast_msg = {
+                                    "type": "copilot_question_remote",
+                                    "question": data.get("question", ""),
+                                    "persona": json.loads(data.get("node_info_json", "{}")).get("persona", "engineer"),
+                                    "nodeId": node_id
+                                }
+                                dead_clients = set()
+                                for client in session['clients']:
+                                    if client != websocket:
+                                        try:
+                                            await client.send_json(broadcast_msg)
+                                        except Exception:
+                                            dead_clients.add(client)
+                                for c in dead_clients:
+                                    session['clients'].remove(c)
                     except: pass
         except WebSocketDisconnect:
             pass
@@ -1135,6 +1175,8 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
                 try:
                     while True:
                         msg = await websocket.receive()
+                        if msg.get("type") == "websocket.disconnect":
+                            break
                         if "bytes" in msg:
                             await input_queue.put(msg["bytes"])
                         elif "text" in msg:

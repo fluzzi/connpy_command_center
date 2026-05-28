@@ -44,8 +44,13 @@ export function useWorkspace(_tabs: Tab[], setTabs: React.Dispatch<React.SetStat
   };
 
   const updateTabsAndPush = (newTabs: Tab[]) => {
-    setTabs(newTabs);
-    if (workspaceId) pushTabsUpdate(newTabs);
+    const activeToken = localStorage.getItem('connpy_session_token') || undefined;
+    const tabsWithOwner = newTabs.map(tab => ({
+      ...tab,
+      ownerToken: tab.ownerToken || activeToken
+    }));
+    setTabs(tabsWithOwner);
+    if (workspaceId) pushTabsUpdate(tabsWithOwner);
   };
 
   const toggleWorkspace = (currentTabs: Tab[], setThoughts: () => void) => {

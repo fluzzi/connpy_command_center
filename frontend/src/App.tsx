@@ -149,6 +149,12 @@ function App() {
         }
       }
 
+      // Auto-open and switch AI tab to terminal for both local operator and remote co-op viewers
+      if (payload.type === 'copilot_question_local' || payload.type === 'copilot_question_remote') {
+        setShowAiPanel(true);
+        setActiveAiTab('terminal');
+      }
+
       if (dispatcher) {
         dispatcher(payload);
       }
@@ -208,29 +214,40 @@ function App() {
     setActiveTabId(newTab.id);
   };
 
-  const handleOpenGraph = (identifier: string, metricType: 'bw' | 'pps', profile: string, region: string) => {
+  const handleOpenGraph = (identifier: string, metricType: 'bw' | 'pps', profile: string, region: string, name?: string) => {
     const tabId = `graph:${metricType}:${identifier}:${profile}:${region}`;
     const existing = tabs.find(t => t.id === tabId);
     if (existing) { setActiveTabId(existing.id); return; }
-    const newTab: Tab = { id: tabId, nodeId: `${metricType.toUpperCase()} - ${identifier}`, type: 'cloud_graph', meta: { profile, region, metricType, identifier } };
+    const displayLabel = name ? `${metricType.toUpperCase()} - ${name}` : `${metricType.toUpperCase()} - ${identifier}`;
+    const newTab: Tab = { id: tabId, nodeId: displayLabel, type: 'cloud_graph', meta: { profile, region, metricType, identifier, name: name || '' } };
     updateTabsAndPush([...tabs, newTab]);
     setActiveTabId(newTab.id);
   };
 
-  const handleOpenConsole = (instanceId: string, profile: string, region: string) => {
+  const handleOpenConsole = (instanceId: string, profile: string, region: string, name?: string) => {
     const consoleId = `aws-console:${instanceId}?profile=${profile}&region=${region}`;
     const existing = tabs.find(t => t.nodeId === consoleId);
     if (existing) { setActiveTabId(existing.id); return; }
-    const newTab: Tab = { id: Math.random().toString(36).substring(7), nodeId: consoleId, type: 'terminal' };
+    const newTab: Tab = { 
+      id: Math.random().toString(36).substring(7), 
+      nodeId: consoleId, 
+      type: 'terminal',
+      customName: name ? `Console - ${name}` : undefined
+    };
     updateTabsAndPush([...tabs, newTab]);
     setActiveTabId(newTab.id);
   };
 
-  const handleOpenSSM = (instanceId: string, profile: string, region: string) => {
+  const handleOpenSSM = (instanceId: string, profile: string, region: string, name?: string) => {
     const ssmId = `aws-ssm:${instanceId}?profile=${profile}&region=${region}`;
     const existing = tabs.find(t => t.nodeId === ssmId);
     if (existing) { setActiveTabId(existing.id); return; }
-    const newTab: Tab = { id: Math.random().toString(36).substring(7), nodeId: ssmId, type: 'terminal' };
+    const newTab: Tab = { 
+      id: Math.random().toString(36).substring(7), 
+      nodeId: ssmId, 
+      type: 'terminal',
+      customName: name ? `SSM - ${name}` : undefined
+    };
     updateTabsAndPush([...tabs, newTab]);
     setActiveTabId(newTab.id);
   };
@@ -643,6 +660,7 @@ function App() {
                       metricType={(tab.meta?.metricType as 'bw' | 'pps') || 'bw'}
                       profile={tab.meta?.profile || ''}
                       region={tab.meta?.region || ''}
+                      name={tab.meta?.name || ''}
                       onClose={() => closeTab(tab.id)}
                     />
                   ) : (

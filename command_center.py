@@ -3,8 +3,7 @@ import argparse
 import sys
 import os
 
-# Force local connpy workspace resolution for all imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../connpy")))
+
 
 import subprocess
 import signal
@@ -100,7 +99,6 @@ class Parser:
 
 class Entrypoint:
     def __init__(self, args, parser, connapp):
-        from connpy import printer
         self.connapp = connapp
         
         if args.stop:
@@ -110,32 +108,32 @@ class Entrypoint:
                     os.kill(pid, signal.SIGTERM)
                     pid_file = get_pid_file()
                     if os.path.exists(pid_file): os.remove(pid_file)
-                    printer.success(f"Command Center (PID {pid}) stopped.")
+                    connapp._service_logger("success", f"Command Center (PID {pid}) stopped.")
                 except Exception as e:
-                    printer.error(f"Failed to stop Command Center: {e}")
+                    connapp._service_logger("error", f"Failed to stop Command Center: {e}")
             else:
-                printer.info("Command Center is not running.")
+                connapp._service_logger("info", "Command Center is not running.")
             return
 
         if args.set_path:
             path = os.path.abspath(args.set_path)
             if not os.path.exists(path):
-                printer.error(f"Path does not exist: {path}")
+                connapp._service_logger("error", f"Path does not exist: {path}")
                 sys.exit(1)
             connapp.services.config_svc.update_setting("command_center_path", path)
-            printer.success(f"Command Center path updated to: {path}")
+            connapp._service_logger("success", f"Command Center path updated to: {path}")
             return
             
         path = get_command_center_path(args, connapp.services.config_svc.get_settings())
         
         if not os.path.exists(path):
-            printer.error(f"Command Center not found at {path}. Use --set-path to configure it.")
+            connapp._service_logger("error", f"Command Center not found at {path}. Use --set-path to configure it.")
             sys.exit(1)
 
         if args.start:
             pid = get_running_pid()
             if pid:
-                printer.info(f"Command Center is already running (PID {pid}).")
+                connapp._service_logger("info", f"Command Center is already running (PID {pid}).")
                 return
             
             cc_script = os.path.join(path, "command_center.py")
@@ -154,7 +152,7 @@ class Entrypoint:
             with open(pid_file, "w") as f:
                 f.write(str(proc.pid))
             
-            printer.success(f"Command Center started in background (PID {proc.pid})")
+            connapp._service_logger("success", f"Command Center started in background (PID {proc.pid})")
             return
 
         if args.build:
@@ -187,9 +185,11 @@ def _connpy_tree(info=None):
 class Preload:
     def __init__(self, connapp):
         self._cc_instance_running = False
+        self._started_by_us = False
         try:
-            from connpy.hooks import MethodHook
-            from connpy.services.system_service import SystemService
+            import sys
+            MethodHook = sys.modules["connpy.hooks"].MethodHook
+            SystemServiceClass = connapp.services.system.__class__
             import functools
 
             # Helper to safely wrap if not already wrapped
@@ -198,9 +198,9 @@ class Preload:
                     return MethodHook(method)
                 return method
 
-            SystemService.start_api = ensure_hook(SystemService.start_api)
-            SystemService.debug_api = ensure_hook(SystemService.debug_api)
-            SystemService.stop_api = ensure_hook(SystemService.stop_api)
+            SystemServiceClass.start_api = ensure_hook(SystemServiceClass.start_api)
+            SystemServiceClass.debug_api = ensure_hook(SystemServiceClass.debug_api)
+            SystemServiceClass.stop_api = ensure_hook(SystemServiceClass.stop_api)
 
             def execute_start_cc(service_instance, dev=False, port=None):
                 # Check if already running
@@ -215,14 +215,13 @@ class Preload:
                 settings = service_instance.config.config
                 cc_path = settings.get("command_center_path")
                 if cc_path and os.path.exists(cc_path):
-                    from connpy import printer
                     cc_script = os.path.join(cc_path, "command_center.py")
                     if os.path.exists(cc_script):
                         mode = " (Dev Mode)" if dev else ""
                         grpc_target = f"127.0.0.1:{port or 8048}"
                         cc_port = settings.get("command_center_port", 8000)
                         
-                        printer.info(f"Starting Command Center{mode} on port {cc_port} (gRPC: {grpc_target}) from {cc_path}...")
+                        connapp._service_logger("info", f"Starting Command Center{mode} on port {cc_port} (gRPC: {grpc_target}) from {cc_path}...")
                         cmd = [sys.executable, cc_script, "-p", str(cc_port), "--grpc-target", grpc_target]
                         if dev:
                             cmd.append("--dev")
@@ -235,17 +234,17 @@ class Preload:
                             kwargs_popen["stderr"] = subprocess.DEVNULL
                             kwargs_popen["start_new_session"] = True
                         else:
-                            printer.info("Vite Frontend will run on http://localhost:5173")
-                            printer.info("Uvicorn Middleware will run on http://localhost:8000")
+                            connapp._service_logger("info", "Vite Frontend will run on http://localhost:5173")
+                            connapp._service_logger("info", "Uvicorn Middleware will run on http://localhost:8000")
 
                         proc = subprocess.Popen(cmd, **kwargs_popen)
                         self._cc_instance_running = True
+                        self._started_by_us = True
                         pid_file = get_pid_file()
                         with open(pid_file, "w") as f:
                             f.write(str(proc.pid))
                 else:
-                    from connpy import printer
-                    printer.warning("command_center_path not configured or missing, skipping Command Center auto-start.")
+                    connapp._service_logger("warning", "command_center_path not configured or missing, skipping Command Center auto-start.")
 
             def pre_debug_cc(*args, **kwargs):
                 service_instance = args[0]
@@ -263,33 +262,43 @@ class Preload:
                 execute_start_cc(service_instance, dev=False, port=port)
                 return kwargs.get("result")
 
-            def stop_cc(*args, **kwargs):
+            def stop_cc_actual():
                 pid = get_running_pid()
                 if pid:
                     try:
                         os.kill(pid, signal.SIGTERM)
                         pid_file = get_pid_file()
                         if os.path.exists(pid_file): os.remove(pid_file)
-                        from connpy import printer
-                        printer.info("Command Center stopped.")
+                        connapp._service_logger("info", "Command Center stopped.")
                     except:
                         pass
                 self._cc_instance_running = False
+
+            def stop_cc_debug(*args, **kwargs):
+                if getattr(self, "_started_by_us", False):
+                    stop_cc_actual()
+                return kwargs.get("result")
+
+            def stop_cc_explicit(*args, **kwargs):
+                stop_cc_actual()
                 return kwargs.get("result")
 
             # Register hooks
-            SystemService.start_api.register_post_hook(post_start_cc)
-            SystemService.debug_api.register_pre_hook(pre_debug_cc)
-            SystemService.debug_api.register_post_hook(stop_cc)
-            SystemService.stop_api.register_post_hook(stop_cc)
+            SystemServiceClass.start_api.register_post_hook(post_start_cc)
+            SystemServiceClass.debug_api.register_pre_hook(pre_debug_cc)
+            SystemServiceClass.debug_api.register_post_hook(stop_cc_debug)
+            SystemServiceClass.stop_api.register_post_hook(stop_cc_explicit)
 
-        except ImportError:
+        except (KeyError, AttributeError, ImportError):
             # Not running within connpy context
             pass
 
 
 
 if __name__ == "__main__":
+    # Force local connpy workspace resolution for all imports
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../connpy")))
+    
     parser = Parser().parser
     args = parser.parse_args()
     

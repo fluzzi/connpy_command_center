@@ -4,6 +4,7 @@ export interface Tab {
   type?: 'terminal' | 'cloud_explorer' | 'cloud_inspect' | 'cloud_flowlog' | 'playbook_editor' | 'playbook_result' | 'topology' | 'cloud_graph';
   customName?: string;
   meta?: Record<string, string>;
+  ownerToken?: string;
 }
 export interface AiThought {
   id: string;

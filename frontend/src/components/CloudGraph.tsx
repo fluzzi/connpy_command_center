@@ -8,9 +8,10 @@ interface CloudGraphProps {
   region: string;
   metricType: 'bw' | 'pps';
   onClose: () => void;
+  name?: string;
 }
 
-export default function CloudGraph({ identifier, profile, region, metricType, onClose }: CloudGraphProps) {
+export default function CloudGraph({ identifier, profile, region, metricType, onClose, name }: CloudGraphProps) {
   const [data, setData] = useState<{ timestamps: string[], in: number[], out: number[] } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -223,7 +224,7 @@ export default function CloudGraph({ identifier, profile, region, metricType, on
               {metricType === 'bw' ? 'Bandwidth Utilization' : 'Packets Per Second'}
             </h2>
             <p className="text-[10px] text-[#d8dee9]/60 font-bold tracking-widest uppercase truncate">
-              {identifier} | {profile} | {region}
+              {name ? `${name} (${identifier})` : identifier} | {profile} | {region}
             </p>
           </div>
         </div>
