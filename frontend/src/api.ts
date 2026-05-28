@@ -10,9 +10,20 @@ const getApiPort = () => {
 const API_BASE = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}${getApiPort() ? ':' + getApiPort() : ''}`;
 export const API_KEY = import.meta.env.VITE_API_KEY || 'connpy-dev-key-12345';
 
-const headers = {
-    'Authorization': `Bearer ${API_KEY}`,
-    'Content-Type': 'application/json'
+export const getHeaders = () => {
+    const token = localStorage.getItem('connpy_session_token');
+    return {
+        'Authorization': `Bearer ${token || API_KEY}`,
+        'Content-Type': 'application/json'
+    };
+};
+
+const getAuthParam = () => {
+    const token = localStorage.getItem('connpy_session_token');
+    if (token) {
+        return { name: 'token', value: token };
+    }
+    return { name: 'api_key', value: API_KEY };
 };
 
 export const api = {
@@ -37,33 +48,47 @@ export const api = {
         return currentSessionId;
     },
 
-    getInventory: () => fetch(`${API_BASE}/api/inventory`, { headers }).then(r => r.json()),
+    getAuthStatus: () => fetch(`${API_BASE}/api/auth/status`).then(r => r.json()),
+
+    login: (username: string, password: string) => fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+    }).then(async r => {
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.detail || 'Login failed');
+        }
+        return r.json();
+    }),
+
+    getInventory: () => fetch(`${API_BASE}/api/inventory`, { headers: getHeaders() }).then(r => r.json()),
     
-    getNodeDetails: (nodeId: string) => fetch(`${API_BASE}/api/node/${encodeURIComponent(nodeId)}`, { headers }).then(r => r.json()),
+    getNodeDetails: (nodeId: string) => fetch(`${API_BASE}/api/node/${encodeURIComponent(nodeId)}`, { headers: getHeaders() }).then(r => r.json()),
     
-    awsInfo: () => fetch(`${API_BASE}/api/aws/info`, { method: 'POST', headers }).then(r => r.json()),
+    awsInfo: () => fetch(`${API_BASE}/api/aws/info`, { method: 'POST', headers: getHeaders() }).then(r => r.json()),
     
     awsInventory: (profile: string, region: string) => fetch(`${API_BASE}/api/aws/inventory`, {
         method: 'POST',
-        headers,
+        headers: getHeaders(),
         body: JSON.stringify({ profile, region })
     }).then(r => r.json()),
     
     awsInspect: (profile: string, region: string, asset_id: string, filter_ip: string | null = null) => fetch(`${API_BASE}/api/aws/inspect`, {
         method: 'POST',
-        headers,
+        headers: getHeaders(),
         body: JSON.stringify({ profile, region, identifier: asset_id, filter_ip })
     }).then(r => r.json()),
 
     awsFlowLog: (profile: string, region: string, eni_id: string | null, fl_id: string | null, time_range_hours: number, filter: string | null = null) => fetch(`${API_BASE}/api/aws/flowlog/view`, {
         method: 'POST',
-        headers,
+        headers: getHeaders(),
         body: JSON.stringify({ profile, region, identifier: eni_id, fl_id, hours: time_range_hours, filter })
     }).then(r => r.json()),
 
     awsMetrics: (profile: string, region: string, identifier: string, metric_type: 'bw' | 'pps', time: number = 1, unit: string = 'mbps') => fetch(`${API_BASE}/api/aws/metrics`, {
         method: 'POST',
-        headers,
+        headers: getHeaders(),
         body: JSON.stringify({ profile, region, identifier, metric_type, time, unit })
     }).then(r => r.json()),
 
@@ -80,14 +105,16 @@ export const api = {
     getAwsFlowLogWsUrl: () => {
         const base = api.getWsBaseUrl();
         const url = new URL(`${base}/ws/aws/flowlog`);
-        url.searchParams.append('api_key', API_KEY);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
         return url.toString();
     },
 
     getAiWsUrl: (workspaceId: string | null) => {
         const base = api.getWsBaseUrl();
         const url = new URL(`${base}/ws/ai`);
-        url.searchParams.append('api_key', API_KEY);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
         
         // Use workspaceId if in co-op mode, otherwise use persistent local session
         const sessionId = workspaceId || api.getActiveSessionId();
@@ -99,7 +126,8 @@ export const api = {
     getTerminalWsUrl: (nodeId: string, workspaceId: string | null) => {
         const base = api.getWsBaseUrl();
         const url = new URL(`${base}/ws/terminal/${encodeURIComponent(nodeId)}`);
-        url.searchParams.append('api_key', API_KEY);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
         if (workspaceId) {
             url.searchParams.append('session_id', workspaceId);
         }
@@ -109,26 +137,28 @@ export const api = {
     getPlaybookWsUrl: () => {
         const base = api.getWsBaseUrl();
         const url = new URL(`${base}/ws/playbook`);
-        url.searchParams.append('api_key', API_KEY);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
         return url.toString();
     },
 
     runCommands: (nodes: string[], commands: string[], variables: any = {}, timeout: number = 10) => fetch(`${API_BASE}/api/run`, {
         method: 'POST',
-        headers,
+        headers: getHeaders(),
         body: JSON.stringify({ nodes, commands, variables, timeout })
     }).then(r => r.json()),
 
     testCommands: (nodes: string[], commands: string[], expected: string[], variables: any = {}, timeout: number = 10) => fetch(`${API_BASE}/api/test`, {
         method: 'POST',
-        headers,
+        headers: getHeaders(),
         body: JSON.stringify({ nodes, commands, expected, variables, timeout })
     }).then(r => r.json()),
 
     getWorkspaceWsUrl: (workspaceId: string) => {
         const base = api.getWsBaseUrl();
         const url = new URL(`${base}/ws/workspace/${encodeURIComponent(workspaceId)}`);
-        url.searchParams.append('api_key', API_KEY);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
         return url.toString();
     }
 };

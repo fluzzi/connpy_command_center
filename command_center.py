@@ -2,6 +2,10 @@
 import argparse
 import sys
 import os
+
+# Force local connpy workspace resolution for all imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../connpy")))
+
 import subprocess
 import signal
 import time

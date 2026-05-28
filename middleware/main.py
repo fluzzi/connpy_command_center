@@ -8,6 +8,11 @@ import grpc
 from typing import AsyncGenerator, Dict, Set
 
 # Add connpy root to sys.path to import its proto/grpc modules
+for mod in list(sys.modules.keys()):
+    if mod == "connpy" or mod.startswith("connpy."):
+        sys.modules.pop(mod, None)
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../connpy")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from connpy.grpc_layer import connpy_pb2, connpy_pb2_grpc, remote_plugin_pb2, remote_plugin_pb2_grpc
@@ -37,22 +42,81 @@ async def verify_api_key(api_key: str = Query(None), authorization: str = Header
     if not token and authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1]
     
-    if token != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    return token
+    if not token:
+        raise HTTPException(status_code=401, detail="API Key or Token is missing")
+        
+    if token == API_KEY:
+        return {"type": "legacy", "token": token}
+        
+    try:
+        import jwt
+        payload = jwt.decode(token, options={"verify_signature": False})
+        username = payload.get("sub")
+        if username:
+            return {"type": "jwt", "token": token, "username": username}
+    except Exception:
+        pass
+        
+    raise HTTPException(status_code=401, detail="Invalid API Key or Session Token")
 
 # Configuration for Connpy Backend
 CONNPY_URL = os.getenv("CONNPY_API_URL", os.getenv("CONNPY_GRPC_SERVER", "127.0.0.1:8048"))
 # Strip protocol for gRPC client compatibility if present
 GRPC_SERVER_ADDRESS = CONNPY_URL.replace("http://", "").replace("https://", "")
 
-@app.get("/api/inventory", dependencies=[Depends(verify_api_key)])
-async def get_inventory():
+@app.get("/api/auth/status")
+async def get_auth_status():
+    try:
+        async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+            stub = connpy_pb2_grpc.NodeServiceStub(channel)
+            # Try listing nodes without token. If auth is enabled, this will raise UNAUTHENTICATED.
+            await stub.list_nodes(connpy_pb2.FilterRequest(filter_str=""))
+            return {"auth_required": False}
+    except grpc.aio.AioRpcError as e:
+        if e.code() == grpc.StatusCode.UNAUTHENTICATED:
+            return {"auth_required": True}
+        return {"auth_required": False}
+    except Exception:
+        return {"auth_required": False}
+
+@app.post("/api/auth/login")
+async def login(request: Request):
+    data = await request.json()
+    username = data.get("username")
+    password = data.get("password")
+    
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+        
+    async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+        stub = connpy_pb2_grpc.AuthServiceStub(channel)
+        try:
+            resp = await stub.login(connpy_pb2.LoginRequest(username=username, password=password))
+            return {
+                "token": resp.token,
+                "username": resp.username,
+                "expires_at": resp.expires_at
+            }
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.UNAUTHENTICATED:
+                raise HTTPException(status_code=401, detail="Invalid username or password")
+            raise HTTPException(status_code=500, detail=f"gRPC Error: {e.details()}")
+
+@app.get("/api/auth/me")
+async def get_me(auth: dict = Depends(verify_api_key)):
+    if auth["type"] == "legacy":
+        return {"username": "admin", "role": "legacy"}
+    return {"username": auth["username"], "role": "user"}
+
+
+@app.get("/api/inventory")
+async def get_inventory(auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
         stub = connpy_pb2_grpc.NodeServiceStub(channel)
         
-        nodes_task = stub.list_nodes(connpy_pb2.FilterRequest(filter_str=""))
-        folders_task = stub.list_folders(connpy_pb2.FilterRequest(filter_str=""))
+        nodes_task = stub.list_nodes(connpy_pb2.FilterRequest(filter_str=""), metadata=metadata)
+        folders_task = stub.list_folders(connpy_pb2.FilterRequest(filter_str=""), metadata=metadata)
         
         nodes_resp, folders_resp = await asyncio.gather(nodes_task, folders_task)
         
@@ -69,20 +133,24 @@ async def get_inventory():
             "folders": folders
         }
 
-@app.get("/api/node/{node_id}", dependencies=[Depends(verify_api_key)])
-async def get_node_details(node_id: str):
+@app.get("/api/node/{node_id}")
+async def get_node_details(node_id: str, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
         stub = connpy_pb2_grpc.NodeServiceStub(channel)
         try:
-            resp = await stub.get_node_details(connpy_pb2.IdRequest(id=node_id))
+            resp = await stub.get_node_details(connpy_pb2.IdRequest(id=node_id), metadata=metadata)
             return MessageToDict(resp.data)
         except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.UNAUTHENTICATED:
+                raise HTTPException(status_code=401, detail="Session expired or invalid token")
             raise HTTPException(status_code=404, detail=f"Node {node_id} not found: {e.details()}")
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/aws/info", dependencies=[Depends(verify_api_key)])
-async def aws_info():
+@app.post("/api/aws/info")
+async def aws_info(auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
         stub = remote_plugin_pb2_grpc.RemotePluginServiceStub(channel)
         args = {"command": "find", "__func_name__": "handle_info_command"}
@@ -90,14 +158,15 @@ async def aws_info():
         
         output = []
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output.append(chunk.text)
             return json.loads("".join(output))
         except Exception as e:
             return {"error": str(e)}
 
 @app.post("/api/aws/inventory")
-async def aws_inventory(request: Request):
+async def aws_inventory(request: Request, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     data = await request.json()
     region = data.get("region")
     profile = data.get("profile")
@@ -118,13 +187,15 @@ async def aws_inventory(request: Request):
         
         output = []
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output.append(chunk.text)
             return json.loads("".join(output))
         except Exception as e:
             return {"error": str(e)}
-@app.post("/api/aws/inspect", dependencies=[Depends(verify_api_key)])
-async def aws_inspect(request: Request):
+
+@app.post("/api/aws/inspect")
+async def aws_inspect(request: Request, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     data = await request.json()
     identifier = data.get("identifier")
     profile = data.get("profile")
@@ -150,14 +221,15 @@ async def aws_inspect(request: Request):
         
         output = []
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output.append(chunk.text)
             return {"output": "".join(output)}
         except Exception as e:
             return {"error": str(e)}
 
-@app.post("/api/aws/flowlog/toggle", dependencies=[Depends(verify_api_key)])
-async def aws_flowlog_toggle(request: Request):
+@app.post("/api/aws/flowlog/toggle")
+async def aws_flowlog_toggle(request: Request, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     data = await request.json()
     identifier = data.get("identifier")
     action = data.get("action") # 'enable' or 'disable'
@@ -182,14 +254,15 @@ async def aws_flowlog_toggle(request: Request):
         
         output = []
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output.append(chunk.text)
             return json.loads("".join(output))
         except Exception as e:
             return {"error": str(e)}
 
-@app.post("/api/aws/metrics", dependencies=[Depends(verify_api_key)])
-async def aws_metrics(request: Request):
+@app.post("/api/aws/metrics")
+async def aws_metrics(request: Request, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     data = await request.json()
     identifier = data.get("identifier")
     profile = data.get("profile")
@@ -226,14 +299,15 @@ async def aws_metrics(request: Request):
         
         output = []
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output.append(chunk.text)
             return json.loads("".join(output))
         except Exception as e:
             return {"error": str(e)}
 
-@app.post("/api/aws/flowlog/view", dependencies=[Depends(verify_api_key)])
-async def aws_flowlog_view(request: Request):
+@app.post("/api/aws/flowlog/view")
+async def aws_flowlog_view(request: Request, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     data = await request.json()
     identifier = data.get("identifier")
     fl_id = data.get("fl_id")
@@ -266,18 +340,35 @@ async def aws_flowlog_view(request: Request):
         
         output = []
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output.append(chunk.text)
             return {"output": "".join(output)}
         except Exception as e:
             return {"error": str(e)}
 
 @app.websocket("/ws/aws/flowlog")
-async def aws_flowlog_stream(websocket: WebSocket, api_key: str = Query(None)):
-    await websocket.accept()
-    if api_key != API_KEY:
+async def aws_flowlog_stream(websocket: WebSocket, api_key: str = Query(None), token: str = Query(None)):
+    auth_token = token or api_key
+    is_authorized = False
+    username = None
+
+    if auth_token == API_KEY:
+        is_authorized = True
+    elif auth_token:
+        try:
+            import jwt
+            payload = jwt.decode(auth_token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
         await websocket.close(code=1008)
         return
+        
+    await websocket.accept()
     
     try:
         data = await websocket.receive_json()
@@ -301,6 +392,10 @@ async def aws_flowlog_stream(websocket: WebSocket, api_key: str = Query(None)):
         await websocket.close()
         return
 
+    metadata = []
+    if username and auth_token:
+        metadata.append(("authorization", f"Bearer {auth_token}"))
+
     async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
         stub = remote_plugin_pb2_grpc.RemotePluginServiceStub(channel)
         args = {
@@ -319,7 +414,7 @@ async def aws_flowlog_stream(websocket: WebSocket, api_key: str = Query(None)):
         req = remote_plugin_pb2.PluginInvokeRequest(name="aws", args_json=json.dumps(args))
         
         try:
-            call = stub.invoke_plugin(req)
+            call = stub.invoke_plugin(req, metadata=metadata)
             
             async def write_to_websocket():
                 try:
@@ -368,11 +463,11 @@ class WorkspaceManager:
         self.sessions: Dict[str, dict] = {}
         self.lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket, session_id: str):
+    async def connect(self, websocket: WebSocket, session_id: str, token: str = None):
         await websocket.accept()
         async with self.lock:
             if session_id not in self.sessions:
-                self.sessions[session_id] = {'clients': set(), 'tabs': []}
+                self.sessions[session_id] = {'clients': set(), 'tabs': [], 'owner_token': token}
             self.sessions[session_id]['clients'].add(websocket)
             
             # Send current tabs to the new client
@@ -416,10 +511,27 @@ async def get_sessions():
 
 @app.websocket("/ws/workspace/{session_id}")
 async def workspace_websocket_endpoint(websocket: WebSocket, session_id: str):
-    if websocket.query_params.get("api_key") != API_KEY:
+    token = websocket.query_params.get("token") or websocket.query_params.get("api_key")
+    is_authorized = False
+    username = None
+    
+    if token == API_KEY:
+        is_authorized = True
+    elif token:
+        try:
+            import jwt
+            payload = jwt.decode(token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+            
+    if not is_authorized:
         await websocket.close(code=1008)
         return
-    await workspace_manager.connect(websocket, session_id)
+        
+    await workspace_manager.connect(websocket, session_id, token=token if username else None)
     try:
         while True:
             data = await websocket.receive_json()
@@ -435,9 +547,14 @@ class SharedAIManager:
         self.sessions = {}
         self.lock = asyncio.Lock()
 
-    async def get_or_create_session(self, session_id: str):
+    async def get_or_create_session(self, session_id: str, token: str = None):
         async with self.lock:
             if session_id not in self.sessions:
+                owner_token = None
+                if session_id in workspace_manager.sessions:
+                    owner_token = workspace_manager.sessions[session_id].get("owner_token")
+                effective_token = owner_token or token
+
                 channel = grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS)
                 stub = connpy_pb2_grpc.AIServiceStub(channel)
                 input_queue = asyncio.Queue()
@@ -451,7 +568,8 @@ class SharedAIManager:
                         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
                         yield connpy_pb2.AskRequest(**filtered_data)
 
-                call = stub.ask(request_generator())
+                metadata = [("authorization", f"Bearer {effective_token}")] if effective_token else []
+                call = stub.ask(request_generator(), metadata=metadata)
                 
                 session = {
                     'clients': set(),
@@ -516,14 +634,33 @@ shared_ai_manager = SharedAIManager()
 
 @app.websocket("/ws/ai")
 async def ai_websocket_endpoint(websocket: WebSocket):
-    if websocket.query_params.get("api_key") != API_KEY:
+    token = websocket.query_params.get("token") or websocket.query_params.get("api_key")
+    is_authorized = False
+    username = None
+
+    if token == API_KEY:
+        is_authorized = True
+    elif token:
+        try:
+            import jwt
+            payload = jwt.decode(token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
         await websocket.close(code=1008)
         return
+        
     await websocket.accept()
     session_id = websocket.query_params.get("session_id")
     
+    metadata = [("authorization", f"Bearer {token}")] if username and token else []
+    
     if session_id:
-        session = await shared_ai_manager.get_or_create_session(session_id)
+        session = await shared_ai_manager.get_or_create_session(session_id, token=token if username else None)
         session['clients'].add(websocket)
         
         # Send AI history to late-joiners
@@ -642,8 +779,9 @@ async def ai_websocket_endpoint(websocket: WebSocket):
 
 from urllib.parse import parse_qs
 
-async def resolve_dynamic_node(node_id: str, channel: grpc.aio.Channel, websocket: WebSocket = None) -> tuple[str, str]:
+async def resolve_dynamic_node(node_id: str, channel: grpc.aio.Channel, websocket: WebSocket = None, token: str = None) -> tuple[str, str]:
     """Resolves dynamic nodes (like aws-console) by calling the remote plugin service. Returns (actual_id, params_json)."""
+    metadata = [("authorization", f"Bearer {token}")] if token else []
     if node_id.startswith("aws-console:"):
         if websocket:
             try:
@@ -673,7 +811,7 @@ async def resolve_dynamic_node(node_id: str, channel: grpc.aio.Channel, websocke
         
         output = ""
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output += chunk.text
         except Exception as e:
             raise Exception(f"Failed to invoke AWS plugin via gRPC: {e}")
@@ -723,7 +861,7 @@ async def resolve_dynamic_node(node_id: str, channel: grpc.aio.Channel, websocke
         
         output = ""
         try:
-            async for chunk in stub.invoke_plugin(req):
+            async for chunk in stub.invoke_plugin(req, metadata=metadata):
                 output += chunk.text
         except Exception as e:
             raise Exception(f"Failed to invoke AWS plugin via gRPC: {e}")
@@ -753,18 +891,25 @@ class SharedTerminalManager:
         self.sessions = {}
         self.lock = asyncio.Lock()
 
-    async def get_or_create_session(self, session_id: str, node_id: str):
+    async def get_or_create_session(self, session_id: str, node_id: str, token: str = None):
         key = f"{session_id}::{node_id}"
         async with self.lock:
             if key not in self.sessions:
+                owner_token = None
+                if session_id in workspace_manager.sessions:
+                    owner_token = workspace_manager.sessions[session_id].get("owner_token")
+                effective_token = owner_token or token
+
                 channel = grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS)
                 stub = connpy_pb2_grpc.NodeServiceStub(channel)
                 print(f"Starting shared gRPC call for {node_id}")
                 input_queue = asyncio.Queue()
                 
+                metadata = [("authorization", f"Bearer {effective_token}")] if effective_token else []
+                
                 async def request_generator():
                     try:
-                        resolved_id, params_json = await resolve_dynamic_node(node_id, channel)
+                        resolved_id, params_json = await resolve_dynamic_node(node_id, channel, token=effective_token)
                         print(f"Generator yielding initial request for {resolved_id}")
                         if params_json:
                             yield connpy_pb2.InteractRequest(id=resolved_id, cols=80, rows=24, connection_params_json=params_json)
@@ -797,7 +942,7 @@ class SharedTerminalManager:
                         pass
 
                 print(f"Creating shared terminal session for {key}")
-                call = stub.interact_node(request_generator())
+                call = stub.interact_node(request_generator(), metadata=metadata)
                 
                 session = {
                     'clients': set(),
@@ -892,13 +1037,31 @@ from urllib.parse import unquote
 @app.websocket("/ws/terminal/{node_id}")
 async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str = Query(None)):
     node_id = unquote(node_id)
-    if websocket.query_params.get("api_key") != API_KEY:
+    token = websocket.query_params.get("token") or websocket.query_params.get("api_key")
+    is_authorized = False
+    username = None
+
+    if token == API_KEY:
+        is_authorized = True
+    elif token:
+        try:
+            import jwt
+            payload = jwt.decode(token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
         await websocket.close(code=1008)
         return
     await websocket.accept()
     
+    metadata = [("authorization", f"Bearer {token}")] if username and token else []
+    
     if session_id:
-        session = await shared_terminal_manager.get_or_create_session(session_id, node_id)
+        session = await shared_terminal_manager.get_or_create_session(session_id, node_id, token=token if username else None)
         session['clients'].add(websocket)
         
         if session['history']:
@@ -945,7 +1108,7 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
         
         async def request_generator():
             try:
-                resolved_id, params_json = await resolve_dynamic_node(node_id, channel, websocket)
+                resolved_id, params_json = await resolve_dynamic_node(node_id, channel, websocket, token=token if username else None)
                 if params_json:
                     yield connpy_pb2.InteractRequest(id=resolved_id, cols=80, rows=24, connection_params_json=params_json)
                 else:
@@ -966,7 +1129,7 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
                     pass
 
         try:
-            call = stub.interact_node(request_generator())
+            call = stub.interact_node(request_generator(), metadata=metadata)
             
             async def read_from_websocket():
                 try:
@@ -1056,11 +1219,29 @@ def dict_to_struct(d):
     return s
 
 @app.websocket("/ws/playbook")
-async def playbook_websocket_endpoint(websocket: WebSocket, api_key: str = Query(None)):
-    if api_key != API_KEY:
+async def playbook_websocket_endpoint(websocket: WebSocket, token: str = Query(None), api_key: str = Query(None)):
+    auth_token = token or api_key
+    is_authorized = False
+    username = None
+
+    if auth_token == API_KEY:
+        is_authorized = True
+    elif auth_token:
+        try:
+            import jwt
+            payload = jwt.decode(auth_token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
         await websocket.close(code=1008)
         return
     await websocket.accept()
+    
+    metadata = [("authorization", f"Bearer {auth_token}")] if username and auth_token else []
     
     channel = None
     try:
@@ -1070,7 +1251,7 @@ async def playbook_websocket_endpoint(websocket: WebSocket, api_key: str = Query
             await websocket.send_json({"type": "error", "data": "No playbook data received."})
             await websocket.close()
             return
-
+ 
         async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
             exec_stub = connpy_pb2_grpc.ExecutionServiceStub(channel)
             
@@ -1078,7 +1259,7 @@ async def playbook_websocket_endpoint(websocket: WebSocket, api_key: str = Query
             if not tasks:
                 await websocket.send_json({"type": "error", "data": "Playbook has no tasks."})
                 return
-
+ 
             for task_index, task in enumerate(tasks):
                 task_name = task.get("name", f"Task {task_index + 1}")
                 action = task.get("action", "run")
@@ -1094,7 +1275,7 @@ async def playbook_websocket_endpoint(websocket: WebSocket, api_key: str = Query
                 if not nodes:
                     await websocket.send_json({"type": "header", "data": f"--- SKIPPING {task_name.upper()} (NO NODES) ---"})
                     continue
-
+ 
                 await websocket.send_json({"type": "header", "data": f"--- STARTING {task_name.upper()} ---"})
                 
                 try:
@@ -1109,7 +1290,7 @@ async def playbook_websocket_endpoint(websocket: WebSocket, api_key: str = Query
                             folder=folder,
                             name=task_name
                         )
-                        async for response in exec_stub.run_commands(req):
+                        async for response in exec_stub.run_commands(req, metadata=metadata):
                             await websocket.send_json({"type": "output", "node": response.unique_id, "data": response.output, "status": response.status})
                     elif action == "test":
                         expected_list = [expected] if isinstance(expected, str) else list(expected) if expected else []
@@ -1124,7 +1305,7 @@ async def playbook_websocket_endpoint(websocket: WebSocket, api_key: str = Query
                             folder=folder,
                             name=task_name
                         )
-                        async for response in exec_stub.test_commands(req):
+                        async for response in exec_stub.test_commands(req, metadata=metadata):
                             result_dict = MessageToDict(response.test_result) if response.test_result else {}
                             await websocket.send_json({"type": "output", "node": response.unique_id, "data": response.output, "status": response.status, "result": result_dict})
                     else:
@@ -1144,8 +1325,9 @@ async def playbook_websocket_endpoint(websocket: WebSocket, api_key: str = Query
         if websocket.client_state.name != "DISCONNECTED":
             await websocket.close()
 
-@app.post("/api/run", dependencies=[Depends(verify_api_key)])
-async def api_run_commands(request: Request):
+@app.post("/api/run")
+async def api_run_commands(request: Request, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     data = await request.json()
     nodes = data.get("nodes", [])
     commands = data.get("commands", [])
@@ -1165,15 +1347,16 @@ async def api_run_commands(request: Request):
             parallel=10,
             timeout=timeout
         )
-        async for response in stub.run_commands(req):
+        async for response in stub.run_commands(req, metadata=metadata):
             results[response.unique_id] = {
                 "output": response.output,
                 "status": response.status
             }
     return results
 
-@app.post("/api/test", dependencies=[Depends(verify_api_key)])
-async def api_test_commands(request: Request):
+@app.post("/api/test")
+async def api_test_commands(request: Request, auth: dict = Depends(verify_api_key)):
+    metadata = [("authorization", f"Bearer {auth['token']}")] if auth["type"] == "jwt" else []
     data = await request.json()
     nodes = data.get("nodes", [])
     commands = data.get("commands", [])
@@ -1198,7 +1381,7 @@ async def api_test_commands(request: Request):
             parallel=10,
             timeout=timeout
         )
-        async for response in stub.test_commands(req):
+        async for response in stub.test_commands(req, metadata=metadata):
             results[response.unique_id] = {
                 "output": response.output,
                 "status": response.status,

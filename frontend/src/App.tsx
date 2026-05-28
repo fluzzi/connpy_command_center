@@ -12,10 +12,15 @@ import { api } from './api';
 import { useAISession } from './hooks/useAISession';
 import { useWorkspace } from './hooks/useWorkspace';
 import TopologyViewer from './components/TopologyViewer';
-import { X, Terminal as TerminalIcon, Layout, Monitor, Users, Globe, Cloud, Cpu, BookOpen, Copy, RefreshCw, Pencil, Activity, Check } from 'lucide-react';
+import { X, Terminal as TerminalIcon, Layout, Monitor, Users, Globe, Cloud, Cpu, BookOpen, Copy, RefreshCw, Pencil, Activity, Check, LogOut, User } from 'lucide-react';
 import type { Tab } from './types';
+import LoginPage from './components/LoginPage';
 
 function App() {
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [username, setUsername] = useState<string>('');
+
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showAiPanel, setShowAiPanel] = useState(true);
@@ -48,8 +53,58 @@ function App() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [thoughts]);
 
+  // Patch fetch to automatically handle 401 Unauthorized responses globally
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (response.status === 401) {
+        const token = localStorage.getItem('connpy_session_token');
+        if (token) {
+          localStorage.removeItem('connpy_session_token');
+          localStorage.removeItem('connpy_username');
+          setIsAuthenticated(false);
+          setUsername('');
+          setTabs([]);
+          setActiveTabId(null);
+        }
+      }
+      return response;
+    };
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
+
+  // Probe Auth Status on Boot
+  useEffect(() => {
+    api.getAuthStatus()
+      .then(res => {
+        setAuthRequired(res.auth_required);
+        if (res.auth_required) {
+          const token = localStorage.getItem('connpy_session_token');
+          const storedUser = localStorage.getItem('connpy_username');
+          if (token && storedUser) {
+            setIsAuthenticated(true);
+            setUsername(storedUser);
+          } else {
+            setIsAuthenticated(false);
+          }
+        } else {
+          setIsAuthenticated(true);
+        }
+      })
+      .catch(e => {
+        console.error("Failed to probe auth status", e);
+        setAuthRequired(false);
+        setIsAuthenticated(true);
+      });
+  }, []);
+
   // Fetch node inventory for SmartText
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     api.getInventory()
       .then(res => { if (res?.nodes && Array.isArray(res.nodes)) setAvailableNodes(res.nodes); })
       .catch(e => console.error('Failed to fetch available nodes', e));
@@ -65,7 +120,7 @@ function App() {
         if (r.length > 0) setSelectedRegion(r[0]);
       })
       .catch(e => console.error('Failed to fetch AWS info', e));
-  }, []);
+  }, [isAuthenticated]);
 
   // --- Phase 5: Copilot Event Bridge ---
   useEffect(() => {
@@ -295,6 +350,30 @@ function App() {
     setRenamingTabId(null);
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('connpy_session_token');
+    localStorage.removeItem('connpy_username');
+    setIsAuthenticated(false);
+    setUsername('');
+    setTabs([]);
+    setActiveTabId(null);
+  };
+
+  if (authRequired === null) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[#2e3440] text-[#d8dee9] font-sans">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-4 border-[#88c0d0]/30 border-t-[#88c0d0] rounded-full animate-spin" />
+          <div className="text-[10px] font-black uppercase tracking-widest text-[#81a1c1] animate-pulse">Establishing secure handshake...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (authRequired && !isAuthenticated) {
+    return <LoginPage onLoginSuccess={(user) => { setIsAuthenticated(true); setUsername(user); }} />;
+  }
+
   return (
     <div className="flex h-screen w-screen bg-[#2e3440] text-[#d8dee9] font-sans overflow-hidden">
       {contextMenu && (
@@ -448,6 +527,18 @@ function App() {
               <span className="text-[10px] font-black uppercase tracking-widest">Neural Link</span>
             </button>
 
+            {authRequired && (
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#81a1c1]/50 bg-[#81a1c1]/20 text-[#81a1c1] shadow-[0_0_10px_rgba(129,161,193,0.1)] hover:bg-[#bf616a]/15 hover:border-[#bf616a]/40 hover:text-[#bf616a] hover:shadow-[0_0_10px_rgba(191,97,106,0.15)] transition-all cursor-pointer group"
+                title="Disconnect Session"
+              >
+                <User size={14} className="group-hover:text-[#bf616a] transition-colors" />
+                <span className="text-[10px] font-black uppercase tracking-widest">{username}</span>
+                <span className="w-px h-3 bg-[#81a1c1]/30 mx-1 group-hover:bg-[#bf616a]/30 transition-colors" />
+                <LogOut size={14} className="group-hover:text-[#bf616a] transition-colors" />
+              </button>
+            )}
           </div>
         </div>
 

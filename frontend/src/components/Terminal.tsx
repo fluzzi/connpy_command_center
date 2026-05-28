@@ -222,6 +222,15 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     return { ctxStart: start, ctxEnd: end };
   }, [contextMode, contextLines, contextBlocks, blockIndices, effectiveEnd]);
 
+  const highlightKey = React.useMemo(() => {
+    if (contextMode === 'RANGE' && blockIndices.length > 0) {
+      const startIndex = Math.max(0, blockIndices.length - contextBlocks);
+      const activeBlocks = blockIndices.slice(startIndex);
+      return activeBlocks.map(([start, end]) => `${start}-${end}`).join(',');
+    }
+    return `${ctxStart}-${ctxEnd}`;
+  }, [contextMode, contextBlocks, blockIndices, ctxStart, ctxEnd]);
+
   // Visual Highlighting: Update decorations when range changes
   useEffect(() => {
     if (!xtermRef.current || !showCopilot) {
@@ -242,29 +251,41 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     });
     decorationsRef.current = [];
 
-    // Add new decorations for the context range
-    if (ctxStart < ctxEnd) {
-        const cursorAbsLine = xterm.buffer.active.baseY + xterm.buffer.active.cursorY;
+    const cursorAbsLine = xterm.buffer.active.baseY + xterm.buffer.active.cursorY;
 
-        for (let i = ctxStart; i < ctxEnd; i++) {
-            if (i < 0 || i >= xterm.buffer.active.length) continue;
+    const addHighlight = (lineIdx: number) => {
+        if (lineIdx < 0 || lineIdx >= xterm.buffer.active.length) return;
+        const marker = xterm.registerMarker(lineIdx - cursorAbsLine);
+        if (marker) {
+            const decoration = xterm.registerDecoration({
+                marker,
+                backgroundColor: '#81a1c133', // Subtle blue highlight
+                width: xterm.cols
+            });
+            if (decoration) {
+                decorationsRef.current.push({ decoration, marker });
+            } else {
+                marker.dispose();
+            }
+        }
+    };
 
-            const marker = xterm.registerMarker(i - cursorAbsLine);
-            if (marker) {
-                const decoration = xterm.registerDecoration({
-                    marker,
-                    backgroundColor: '#81a1c133', // Subtle blue highlight
-                    width: xterm.cols
-                });
-                if (decoration) {
-                    decorationsRef.current.push({ decoration, marker });
-                } else {
-                    marker.dispose();
-                }
+    if (contextMode === 'RANGE' && blockIndices.length > 0) {
+        const startIndex = Math.max(0, blockIndices.length - contextBlocks);
+        const activeBlocks = blockIndices.slice(startIndex);
+        for (const [start, end] of activeBlocks) {
+            for (let i = start; i < end; i++) {
+                addHighlight(i);
+            }
+        }
+    } else {
+        if (ctxStart < ctxEnd) {
+            for (let i = ctxStart; i < ctxEnd; i++) {
+                addHighlight(i);
             }
         }
     }
-  }, [ctxStart, ctxEnd, showCopilot]);
+  }, [highlightKey, showCopilot]);
 
   // Auto-scroll when range changes
   useEffect(() => {
@@ -316,11 +337,24 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     }
   };
 
+  const actualLineCount = React.useMemo(() => {
+    if (contextMode === 'RANGE' && blockIndices.length > 0) {
+      const startIndex = Math.max(0, blockIndices.length - contextBlocks);
+      const activeBlocks = blockIndices.slice(startIndex);
+      let count = 0;
+      for (const [start, end] of activeBlocks) {
+        count += (end - start);
+      }
+      return count;
+    }
+    return ctxEnd - ctxStart;
+  }, [contextMode, contextBlocks, blockIndices, ctxStart, ctxEnd]);
+
   const contextDetail = contextMode === 'LINES' 
     ? `${Math.min(contextLines, effectiveEnd)} (${Math.min(100, Math.round((contextLines/(effectiveEnd||1))*100))}%)` 
     : contextMode === 'SINGLE' 
-      ? `${contextBlocks} (${ctxEnd - ctxStart}L~): ${cleanPreview(getBlockPreview(contextBlocks))}`
-      : `${contextBlocks} (${ctxEnd - ctxStart}L~): ${getCombinedRangePreview()}`;
+      ? `${contextBlocks} (${actualLineCount}L~): ${cleanPreview(getBlockPreview(contextBlocks))}`
+      : `${contextBlocks} (${actualLineCount}L~): ${getCombinedRangePreview()}`;
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -683,11 +717,25 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     const buffer = xtermRef.current.buffer.active;
     const lines: string[] = [];
 
-    for (let i = ctxStart; i < ctxEnd; i++) {
-      const line = buffer.getLine(i);
-      if (line) {
-        const text = line.translateToString(true);
-        lines.push(text);
+    if (contextMode === 'RANGE' && blockIndices.length > 0) {
+      const startIndex = Math.max(0, blockIndices.length - contextBlocks);
+      const activeBlocks = blockIndices.slice(startIndex);
+      for (const [start, end] of activeBlocks) {
+        for (let i = start; i < end; i++) {
+          const line = buffer.getLine(i);
+          if (line) {
+            const text = line.translateToString(true);
+            lines.push(text);
+          }
+        }
+      }
+    } else {
+      for (let i = ctxStart; i < ctxEnd; i++) {
+        const line = buffer.getLine(i);
+        if (line) {
+          const text = line.translateToString(true);
+          lines.push(text);
+        }
       }
     }
     return lines.join('\n').trim();
