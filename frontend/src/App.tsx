@@ -26,6 +26,10 @@ function App() {
   const [showAiPanel, setShowAiPanel] = useState(true);
   const [activeAiTab, setActiveAiTab] = useState<'global' | 'terminal'>('global');
   const [copiedId, setCopiedId] = useState(false);
+  const [isReadOnlyMode, setIsReadOnlyMode] = useState<boolean>(false);
+  const [showExpiredModal, setShowExpiredModal] = useState<boolean>(false);
+  const [showReauthModal, setShowReauthModal] = useState<boolean>(false);
+  const [sessionToken, setSessionToken] = useState<string | null>(localStorage.getItem('connpy_session_token'));
 
   // Global AWS Context (shared with CloudExplorer)
   const [selectedProfile, setSelectedProfile] = useState('');
@@ -46,7 +50,7 @@ function App() {
 
   // --- Hooks ---
   const { workspaceId, socketRef: workspaceSocketRef, updateTabsAndPush, toggleWorkspace } = useWorkspace(tabs, setTabs);
-  const { thoughts, isAiProcessing, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought } = useAISession(workspaceId);
+  const { thoughts, isAiProcessing, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought, startNewSession } = useAISession(workspaceId, sessionToken);
 
   // Auto-scroll AI panel
   useEffect(() => {
@@ -61,12 +65,9 @@ function App() {
       if (response.status === 401) {
         const token = localStorage.getItem('connpy_session_token');
         if (token) {
-          localStorage.removeItem('connpy_session_token');
-          localStorage.removeItem('connpy_username');
-          setIsAuthenticated(false);
-          setUsername('');
-          setTabs([]);
-          setActiveTabId(null);
+          if (!isReadOnlyMode) {
+            setShowExpiredModal(true);
+          }
         }
       }
       return response;
@@ -74,7 +75,7 @@ function App() {
     return () => {
       window.fetch = originalFetch;
     };
-  }, []);
+  }, [isReadOnlyMode]);
 
   // Probe Auth Status on Boot
   useEffect(() => {
@@ -85,8 +86,18 @@ function App() {
           const token = localStorage.getItem('connpy_session_token');
           const storedUser = localStorage.getItem('connpy_username');
           if (token && storedUser) {
-            setIsAuthenticated(true);
-            setUsername(storedUser);
+            api.getMe()
+              .then(me => {
+                setIsAuthenticated(true);
+                setUsername(me.username || storedUser);
+              })
+              .catch(() => {
+                localStorage.removeItem('connpy_session_token');
+                localStorage.removeItem('connpy_username');
+                setSessionToken(null);
+                setIsAuthenticated(false);
+                setUsername('');
+              });
           } else {
             setIsAuthenticated(false);
           }
@@ -100,6 +111,40 @@ function App() {
         setIsAuthenticated(true);
       });
   }, []);
+
+  // Schedule proactive session expiration check based on JWT expiration claim
+  useEffect(() => {
+    if (!isAuthenticated || isReadOnlyMode || showExpiredModal) return;
+
+    const token = localStorage.getItem('connpy_session_token');
+    if (!token) return;
+
+    try {
+      const base64Url = token.split('.')[1];
+      if (!base64Url) return;
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(window.atob(base64).split('').map((c) => {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+      const payload = JSON.parse(jsonPayload);
+      
+      const exp = payload.exp;
+      if (exp) {
+        const timeLeftMs = (exp * 1000) - Date.now();
+        if (timeLeftMs > 0) {
+          const timer = setTimeout(() => {
+            setShowExpiredModal(true);
+          }, timeLeftMs);
+          return () => clearTimeout(timer);
+        } else {
+          // Already expired
+          setShowExpiredModal(true);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse token expiration', e);
+    }
+  }, [isAuthenticated, isReadOnlyMode, showExpiredModal]);
 
   // Fetch node inventory for SmartText
   useEffect(() => {
@@ -370,6 +415,7 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem('connpy_session_token');
     localStorage.removeItem('connpy_username');
+    setSessionToken(null);
     setIsAuthenticated(false);
     setUsername('');
     setTabs([]);
@@ -388,7 +434,11 @@ function App() {
   }
 
   if (authRequired && !isAuthenticated) {
-    return <LoginPage onLoginSuccess={(user) => { setIsAuthenticated(true); setUsername(user); }} />;
+    return <LoginPage onLoginSuccess={(user, token) => {
+      setSessionToken(token);
+      setIsAuthenticated(true);
+      setUsername(user);
+    }} />;
   }
 
   return (
@@ -559,6 +609,21 @@ function App() {
           </div>
         </div>
 
+        {isReadOnlyMode && (
+          <div className="bg-[#bf616a]/20 border-b border-[#bf616a]/50 text-[#d8dee9] px-4 py-2.5 text-xs flex items-center justify-between shrink-0 font-bold tracking-wide select-none">
+            <div className="flex items-center gap-2">
+              <span className="text-[#bf616a] text-sm">⚠️</span>
+              <span>SESSION EXPIRED / READ-ONLY MODE — Interactions are disabled due to session token expiration.</span>
+            </div>
+            <button
+              onClick={() => setShowReauthModal(true)}
+              className="bg-[#5e81ac] hover:bg-[#81a1c1] text-white px-3 py-1 rounded text-[10px] font-black uppercase tracking-wider transition-colors outline-none border-none cursor-pointer"
+            >
+              Re-authenticate
+            </button>
+          </div>
+        )}
+
         {/* Content Area */}
         <div className="flex-1 flex overflow-hidden bg-[#2e3440]">
           {tabs.length === 0 ? (
@@ -693,6 +758,7 @@ function App() {
               onSendConfirmation={sendConfirmation}
               onAbort={handleAbort}
               onClearThoughts={handleClearThoughts}
+              onNewSession={startNewSession}
               onToggleThought={toggleThought}
               onClose={() => setShowAiPanel(false)}
               onOpenInspect={handleOpenInspect}
@@ -703,6 +769,293 @@ function App() {
           )}
         </div>
       </div>
+
+      {showExpiredModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(46,52,64,0.7)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+        }}>
+          <div style={{
+            width: '100%', maxWidth: 420,
+            padding: '2rem',
+            background: 'rgba(59,66,82,0.95)',
+            border: '1px solid rgba(76,86,106,0.8)',
+            borderTop: '3px solid #bf616a',
+            borderRadius: '1rem',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+            boxSizing: 'border-box',
+            fontFamily: 'Inter, system-ui, sans-serif',
+            color: '#d8dee9',
+          }}>
+            <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.25rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#bf616a', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              ⚠️ LINK EXPIRED
+            </h2>
+            <p style={{ margin: '0 0 1.25rem', fontSize: '0.825rem', lineHeight: '1.5', color: '#e5e9f0' }}>
+              The secure link to the Command Center has expired. Enter your password to keep the session active without losing your progress, or select another option.
+            </p>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.7rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#81a1c1' }}>
+              Operator: {username}
+            </p>
+
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              const form = e.currentTarget;
+              const passwordInput = form.elements.namedItem('expired-reauth-password') as HTMLInputElement;
+              const errorDiv = form.querySelector('.expired-reauth-error') as HTMLDivElement;
+              const submitBtn = form.querySelector('.expired-reauth-submit') as HTMLButtonElement;
+              
+              if (!passwordInput.value) {
+                if (errorDiv) {
+                  errorDiv.textContent = 'Please enter your password.';
+                  errorDiv.style.display = 'block';
+                }
+                return;
+              }
+
+              if (errorDiv) errorDiv.style.display = 'none';
+              if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'AUTHENTICATING...';
+              }
+
+              try {
+                const res = await api.login(username, passwordInput.value);
+                if (res.token) {
+                  localStorage.setItem('connpy_session_token', res.token);
+                  localStorage.setItem('connpy_username', res.username);
+                  setSessionToken(res.token);
+                  setIsReadOnlyMode(false);
+                  setShowExpiredModal(false);
+                } else {
+                  throw new Error('No token received.');
+                }
+              } catch (err: any) {
+                if (errorDiv) {
+                  errorDiv.textContent = err.message || 'Incorrect password.';
+                  errorDiv.style.display = 'block';
+                }
+                if (submitBtn) {
+                  submitBtn.disabled = false;
+                  submitBtn.textContent = 'RE-ESTABLISH LINK';
+                }
+              }
+            }} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#81a1c1', marginBottom: '0.4rem' }}>
+                  Access Password
+                </label>
+                <input
+                  type="password"
+                  name="expired-reauth-password"
+                  placeholder="••••••••••••"
+                  autoFocus
+                  required
+                  style={{
+                    width: '100%', padding: '0.75rem',
+                    background: 'rgba(46,52,64,0.6)', border: '1px solid rgba(76,86,106,0.6)',
+                    borderRadius: '0.5rem', outline: 'none', color: '#d8dee9', fontSize: '0.875rem',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+
+              <div className="expired-reauth-error" style={{
+                display: 'none', padding: '0.5rem 0.75rem',
+                background: 'rgba(191,97,106,0.15)', border: '1px solid rgba(191,97,106,0.5)',
+                borderRadius: '0.25rem', color: '#bf616a', fontSize: '0.7rem', fontWeight: 700,
+              }} />
+
+              <button
+                type="submit"
+                className="expired-reauth-submit"
+                style={{
+                  width: '100%', padding: '0.75rem',
+                  background: '#5e81ac', border: '1px solid #5e81ac',
+                  borderRadius: '0.5rem', color: '#e5e9f0',
+                  fontWeight: 900, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                  cursor: 'pointer', transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#81a1c1')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = '#5e81ac')}
+              >
+                Re-establish Link
+              </button>
+
+              <div style={{ display: 'flex', gap: '0.75rem', borderTop: '1px solid rgba(76,86,106,0.4)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExpiredModal(false);
+                    setIsReadOnlyMode(true);
+                  }}
+                  style={{
+                    flex: 1, padding: '0.6rem',
+                    background: 'transparent', border: '1px solid rgba(136,192,208,0.4)',
+                    borderRadius: '0.5rem', color: '#88c0d0',
+                    fontWeight: 900, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                    cursor: 'pointer', transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(136,192,208,0.08)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  Read Only
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExpiredModal(false);
+                    handleLogout();
+                  }}
+                  style={{
+                    flex: 1, padding: '0.6rem',
+                    background: 'transparent', border: '1px solid rgba(191,97,106,0.4)',
+                    borderRadius: '0.5rem', color: '#bf616a',
+                    fontWeight: 900, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                    cursor: 'pointer', transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(191,97,106,0.08)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  Sign Out
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showReauthModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(46,52,64,0.7)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+        }}>
+          <div style={{
+            width: '100%', maxWidth: 360,
+            padding: '2rem',
+            background: 'rgba(59,66,82,0.95)',
+            border: '1px solid rgba(76,86,106,0.8)',
+            borderTop: '3px solid #88c0d0',
+            borderRadius: '1rem',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+            boxSizing: 'border-box',
+            fontFamily: 'Inter, system-ui, sans-serif',
+            color: '#d8dee9',
+          }}>
+            <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.1rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#88c0d0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              🔑 RE-AUTHENTICATE OPERATOR
+            </h2>
+            <p style={{ margin: '0 0 1.5rem', fontSize: '0.7rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#81a1c1' }}>
+              Re-establish link for {username}
+            </p>
+
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              const form = e.currentTarget;
+              const passwordInput = form.elements.namedItem('reauth-password') as HTMLInputElement;
+              const errorDiv = form.querySelector('.reauth-error') as HTMLDivElement;
+              const submitBtn = form.querySelector('.reauth-submit') as HTMLButtonElement;
+              
+              if (!passwordInput.value) {
+                if (errorDiv) {
+                  errorDiv.textContent = 'Please enter your password.';
+                  errorDiv.style.display = 'block';
+                }
+                return;
+              }
+
+              if (errorDiv) errorDiv.style.display = 'none';
+              if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'AUTHENTICATING...';
+              }
+
+              try {
+                const res = await api.login(username, passwordInput.value);
+                if (res.token) {
+                  localStorage.setItem('connpy_session_token', res.token);
+                  localStorage.setItem('connpy_username', res.username);
+                  setSessionToken(res.token);
+                  setIsReadOnlyMode(false);
+                  setShowReauthModal(false);
+                } else {
+                  throw new Error('No token received.');
+                }
+              } catch (err: any) {
+                if (errorDiv) {
+                  errorDiv.textContent = err.message || 'Incorrect password.';
+                  errorDiv.style.display = 'block';
+                }
+                if (submitBtn) {
+                  submitBtn.disabled = false;
+                  submitBtn.textContent = 'RE-ESTABLISH LINK';
+                }
+              }
+            }} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#81a1c1', marginBottom: '0.4rem' }}>
+                  Access Password
+                </label>
+                <input
+                  type="password"
+                  name="reauth-password"
+                  placeholder="••••••••••••"
+                  autoFocus
+                  required
+                  style={{
+                    width: '100%', padding: '0.75rem',
+                    background: 'rgba(46,52,64,0.6)', border: '1px solid rgba(76,86,106,0.6)',
+                    borderRadius: '0.5rem', outline: 'none', color: '#d8dee9', fontSize: '0.875rem',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+
+              <div className="reauth-error" style={{
+                display: 'none', padding: '0.5rem 0.75rem',
+                background: 'rgba(191,97,106,0.15)', border: '1px solid rgba(191,97,106,0.5)',
+                borderRadius: '0.25rem', color: '#bf616a', fontSize: '0.7rem', fontWeight: 700,
+              }} />
+
+              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowReauthModal(false)}
+                  style={{
+                    flex: 1, padding: '0.75rem',
+                    background: 'transparent', border: '1px solid rgba(76,86,106,0.6)',
+                    borderRadius: '0.5rem', color: '#d8dee9',
+                    fontWeight: 900, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="reauth-submit"
+                  style={{
+                    flex: 2, padding: '0.75rem',
+                    background: '#5e81ac', border: '1px solid #5e81ac',
+                    borderRadius: '0.5rem', color: '#e5e9f0',
+                    fontWeight: 900, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em',
+                    cursor: 'pointer', transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#81a1c1')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = '#5e81ac')}
+                >
+                  Re-establish Link
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

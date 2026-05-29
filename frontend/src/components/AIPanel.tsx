@@ -289,6 +289,7 @@ interface AIPanelProps {
   onSendConfirmation: (thoughtId: string, answer: string) => void;
   onAbort: () => void;
   onClearThoughts: (tab: 'global' | 'terminal') => void;
+  onNewSession: () => void;
   onToggleThought: (id: string) => void;
   onClose: () => void;
   onOpenInspect: (assetId: string, profile: string, region: string) => void;
@@ -300,7 +301,7 @@ interface AIPanelProps {
 export default function AIPanel({
   thoughts, isAiProcessing, workspaceId, availableNodes,
   activeTab, activeNodeId, onTabChange,
-  onSendPrompt, onSendConfirmation, onAbort, onClearThoughts, onToggleThought, onClose,
+  onSendPrompt, onSendConfirmation, onAbort, onClearThoughts, onNewSession, onToggleThought, onClose,
   onOpenInspect, onOpenNode, onOpenTopology, onConnpyLink
 }: AIPanelProps) {
   const [aiInput, setAiInput] = useState('');
@@ -380,8 +381,7 @@ export default function AIPanel({
   const handleReload = () => {
     if (activeTab === 'global' && !workspaceId) {
       if (confirm('Are you sure you want to start a new chat? This will clear the current session.')) {
-        localStorage.removeItem('active_ai_session');
-        window.location.reload();
+        onNewSession();
       }
     } else {
       onClearThoughts(activeTab);

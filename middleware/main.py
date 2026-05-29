@@ -20,6 +20,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(grpc.aio.AioRpcError)
+async def grpc_exception_handler(request: Request, exc: grpc.aio.AioRpcError):
+    if exc.code() == grpc.StatusCode.UNAUTHENTICATED:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Session expired or invalid token"}
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"gRPC Error: {exc.details()}"}
+    )
+
 API_KEY = "connpy-dev-key-12345"
 env_path = os.path.join(os.path.dirname(__file__), "../frontend/.env")
 if os.path.exists(env_path):
@@ -45,7 +59,13 @@ async def verify_api_key(api_key: str = Query(None), authorization: str = Header
         payload = jwt.decode(token, options={"verify_signature": False})
         username = payload.get("sub")
         if username:
+            import time
+            exp = payload.get("exp")
+            if exp and time.time() > exp:
+                raise HTTPException(status_code=401, detail="Session expired or invalid token")
             return {"type": "jwt", "token": token, "username": username}
+    except HTTPException:
+        raise
     except Exception:
         pass
         

@@ -50,6 +50,14 @@ export const api = {
 
     getAuthStatus: () => fetch(`${API_BASE}/api/auth/status`).then(r => r.json()),
 
+    getMe: () => fetch(`${API_BASE}/api/auth/me`, { headers: getHeaders() }).then(async r => {
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to fetch identity');
+        }
+        return r.json();
+    }),
+
     login: (username: string, password: string) => fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -11,11 +11,17 @@ export function cleanAiText(text: string): string {
     .trim();
 }
 
-export function useAISession(workspaceId: string | null) {
+export function useAISession(workspaceId: string | null, sessionToken: string | null = null) {
   const [thoughts, setThoughts] = useState<AiThought[]>([]);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const currentResponderRef = useRef<'engineer' | 'architect'>('engineer');
   const socketRef = useRef<WebSocket | null>(null);
+
+  const [aiSessionId, setAiSessionId] = useState<string>(workspaceId || api.getActiveSessionId());
+
+  useEffect(() => {
+    setAiSessionId(workspaceId || api.getActiveSessionId());
+  }, [workspaceId]);
 
   useEffect(() => {
     // Expose dispatcher for Terminal Copilot events (bridged from Terminal WebSocket)
@@ -244,7 +250,7 @@ export function useAISession(workspaceId: string | null) {
         socketRef.current.close();
       }
     };
-  }, [workspaceId]);
+  }, [aiSessionId, workspaceId, sessionToken]);
 
   const sendPrompt = useCallback((input: string, sessionId: string) => {
     if (!input.trim() || isAiProcessing) return false;
@@ -279,7 +285,16 @@ export function useAISession(workspaceId: string | null) {
     setThoughts(prev => prev.map(t => t.id === id ? { ...t, isExpanded: !t.isExpanded } : t));
   }, []);
 
+  const startNewSession = useCallback(() => {
+    if (workspaceId) return;
+    localStorage.removeItem('active_ai_session');
+    const newSessionId = api.getActiveSessionId();
+    setAiSessionId(newSessionId);
+    setThoughts([]);
+    setIsAiProcessing(false);
+  }, [workspaceId]);
+
   const isConnected = socketRef.current?.readyState === WebSocket.OPEN;
 
-  return { thoughts, isAiProcessing, isConnected, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought };
+  return { thoughts, isAiProcessing, isConnected, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought, startNewSession };
 }
