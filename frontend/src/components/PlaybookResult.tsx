@@ -5,11 +5,14 @@ import { api } from '../api';
 interface PlaybookResultProps {
   playbookData: any;
   onClose: () => void;
+  onStartAnalysis?: (playbookName: string, customPrompt: string, logs: any[]) => void;
 }
 
-export const PlaybookResult: React.FC<PlaybookResultProps> = ({ playbookData, onClose }) => {
+export const PlaybookResult: React.FC<PlaybookResultProps> = ({ playbookData, onClose, onStartAnalysis }) => {
   const [logs, setLogs] = useState<{type: string, data: string, node?: string, status?: number, result?: any}[]>([]);
   const [isRunning, setIsRunning] = useState(true);
+  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState('');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -63,7 +66,7 @@ export const PlaybookResult: React.FC<PlaybookResultProps> = ({ playbookData, on
   }, []); // Empty dependency array ensures this only runs exactly once on mount
 
   return (
-    <div className="flex flex-col h-full bg-[#2e3440] text-[#d8dee9] font-mono selection:bg-[#81a1c1]/30">
+    <div className="flex flex-col h-full bg-[#2e3440] text-[#d8dee9] font-mono selection:bg-[#81a1c1]/30 relative">
       {/* Terminal Header */}
       <div className="bg-[#2e3440] px-6 py-4 flex justify-between items-center border-b border-[#3b4252] shrink-0 z-10 shadow-md">
         <div className="flex items-center gap-4">
@@ -80,6 +83,15 @@ export const PlaybookResult: React.FC<PlaybookResultProps> = ({ playbookData, on
           </div>
         </div>
         <div className="flex items-center gap-4">
+            {!isRunning && onStartAnalysis && (
+              <button
+                onClick={() => setShowAnalysisModal(true)}
+                className="appearance-none flex items-center gap-2 px-4 py-2 bg-[#81a1c1]/10 hover:bg-[#81a1c1]/20 border border-[#81a1c1]/30 text-[#81a1c1] rounded-lg transition-all text-xs font-black uppercase tracking-wider active:scale-95 cursor-pointer outline-none shadow-md shadow-[#81a1c1]/5 animate-in fade-in duration-300"
+              >
+                <Cpu size={14} className="animate-pulse" />
+                Get AI Analysis
+              </button>
+            )}
             <div 
                 role="button"
                 tabIndex={0}
@@ -174,6 +186,65 @@ export const PlaybookResult: React.FC<PlaybookResultProps> = ({ playbookData, on
           <div className="h-20 shrink-0" />
         </div>
       </div>
+
+      {/* Playbook AI Analysis Modal */}
+      {showAnalysisModal && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#2e3440] border border-[#81a1c1]/30 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 bg-[#3b4252]/50 border-b border-[#3b4252] flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <Cpu size={18} className="text-[#81a1c1]" />
+                <span className="text-xs font-black uppercase tracking-[0.2em] text-[#eceff4]">Playbook Tactical Analysis</span>
+              </div>
+              <button 
+                onClick={() => setShowAnalysisModal(false)} 
+                className="p-1 text-[#81a1c1] hover:text-[#eceff4] hover:bg-white/5 rounded-md transition-all outline-none bg-transparent border-none cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4 overflow-y-auto max-h-[70vh]">
+              <p className="text-xs text-[#d8dee9]/80 leading-relaxed font-mono">
+                The <strong className="text-[#81a1c1]">Network Architect</strong> will review the playbook execution metrics, verify command stdout, check verify pipelines, and draft a high-fidelity diagnostic report.
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-[#81a1c1] block">
+                  Custom Operator Query Context (Optional)
+                </label>
+                <textarea
+                  value={customPrompt}
+                  onChange={(e) => setCustomPrompt(e.target.value)}
+                  placeholder="e.g. Verify BGP peers routing convergence, identify which interfaces had issues, suggest regex adjustments..."
+                  className="w-full h-24 bg-[#1e222a] border border-[#3b4252] rounded-xl p-4 text-xs font-mono text-[#d8dee9] focus:outline-none focus:border-[#81a1c1] transition-all resize-none shadow-inner leading-relaxed placeholder:text-[#81a1c1]/20"
+                />
+              </div>
+
+            </div>
+
+            <div className="px-6 py-4 bg-[#3b4252]/30 border-t border-[#3b4252] flex justify-end gap-3 shrink-0">
+              <button 
+                onClick={() => setShowAnalysisModal(false)} 
+                className="px-5 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-[#d8dee9]/60 hover:text-[#eceff4] hover:bg-white/5 transition-all outline-none bg-transparent border-none cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  if (onStartAnalysis) {
+                    onStartAnalysis(playbookData?.playbook || 'Untitled Playbook', customPrompt, logs);
+                  }
+                  setShowAnalysisModal(false);
+                }}
+                className="bg-[#81a1c1] hover:bg-[#88c0d0] text-[#2e3440] px-6 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center gap-2 shadow-lg shadow-[#81a1c1]/20 outline-none border-none cursor-pointer"
+              >
+                <Cpu size={14} /> Initiate Architect Analysis
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

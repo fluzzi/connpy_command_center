@@ -37,7 +37,7 @@ export const SmartCommandEditor: React.FC<SmartCommandEditorProps> = ({ commands
     return parts.map((part, i) => {
       if (part.startsWith('{') && part.endsWith('}')) {
         return (
-          <span key={i} className="text-[#a3be8c] bg-[#a3be8c]/20 px-[2px] rounded-sm">
+          <span key={i} className="text-[#a3be8c] bg-[#a3be8c]/20 rounded-sm">
             {part}
           </span>
         );
@@ -54,8 +54,14 @@ export const SmartCommandEditor: React.FC<SmartCommandEditorProps> = ({ commands
         {/* Highlight Backdrop */}
         <div 
           ref={backdropRef}
-          className="absolute inset-0 p-4 whitespace-pre-wrap break-all overflow-hidden pointer-events-none select-none z-0 m-0 text-sm font-mono leading-relaxed"
+          className="absolute inset-0 whitespace-pre-wrap break-all overflow-hidden pointer-events-none select-none z-0 m-0"
           aria-hidden="true"
+          style={{
+            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+            fontSize: '14px',
+            lineHeight: '1.625',
+            padding: '16px',
+          }}
         >
           {renderHighlightedText()}
           {text.endsWith('\n') ? <br /> : null}
@@ -69,11 +75,16 @@ export const SmartCommandEditor: React.FC<SmartCommandEditorProps> = ({ commands
           onScroll={handleScroll}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
-          className="w-full min-h-[120px] p-4 bg-transparent focus:outline-none resize-y relative z-10 text-sm font-mono leading-relaxed m-0 border-none whitespace-pre-wrap break-all overflow-x-hidden overflow-y-auto custom-scrollbar block box-border"
+          className="w-full min-h-[120px] bg-transparent focus:outline-none resize-y relative z-10 m-0 whitespace-pre-wrap break-all overflow-x-hidden overflow-y-auto custom-scrollbar block box-border"
           spellCheck={false}
           style={{ 
             color: 'transparent',
             caretColor: '#eceff4',
+            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+            fontSize: '14px',
+            lineHeight: '1.625',
+            padding: '16px',
+            border: '0',
           }}
         />
       </div>

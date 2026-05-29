@@ -285,7 +285,7 @@ interface AIPanelProps {
   activeTab: 'global' | 'terminal';
   activeNodeId?: string;
   onTabChange: (tab: 'global' | 'terminal') => void;
-  onSendPrompt: (input: string, sessionId: string) => boolean;
+  onSendPrompt: (input: string, sessionId: string, displayText?: string) => boolean;
   onSendConfirmation: (thoughtId: string, answer: string) => void;
   onAbort: () => void;
   onClearThoughts: (tab: 'global' | 'terminal') => void;
@@ -296,17 +296,22 @@ interface AIPanelProps {
   onOpenNode: (node: string) => void;
   onOpenTopology: (content: string) => void;
   onConnpyLink: (url: string) => void;
+  width?: number;
+  onWidthChange?: (w: number) => void;
 }
 
 export default function AIPanel({
   thoughts, isAiProcessing, workspaceId, availableNodes,
   activeTab, activeNodeId, onTabChange,
   onSendPrompt, onSendConfirmation, onAbort, onClearThoughts, onNewSession, onToggleThought, onClose,
-  onOpenInspect, onOpenNode, onOpenTopology, onConnpyLink
+  onOpenInspect, onOpenNode, onOpenTopology, onConnpyLink,
+  width, onWidthChange
 }: AIPanelProps) {
   const [aiInput, setAiInput] = useState('');
   const [isResizing, setIsResizing] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(300);
+  const [localWidth, setLocalWidth] = useState(350);
+  const panelWidth = width !== undefined ? width : localWidth;
+  const setPanelWidth = onWidthChange || setLocalWidth;
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Phase 5: Copilot Action Flow State
@@ -674,9 +679,11 @@ export default function AIPanel({
                         <span className="text-[10px] font-black uppercase tracking-widest text-[#81a1c1]">Operator</span>
                         <span className="text-[10px] text-[#d8dee9]/50 font-mono">{thought.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
-                      <p className="text-sm text-[#d8dee9]/80 leading-relaxed">
-                        <SmartText text={thought.content} {...smartTextProps} />
-                      </p>
+                      <div className="text-[13px] text-[#d8dee9]/80 leading-relaxed font-mono whitespace-pre-wrap tracking-tight markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents} urlTransform={markdownUrlTransform}>
+                          {thought.content || ''}
+                        </ReactMarkdown>
+                      </div>
                     </div>
                   </div>
                 ) : (

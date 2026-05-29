@@ -252,11 +252,12 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
     };
   }, [aiSessionId, workspaceId, sessionToken]);
 
-  const sendPrompt = useCallback((input: string, sessionId: string) => {
+  const sendPrompt = useCallback((input: string, sessionId: string, displayText?: string) => {
     if (!input.trim() || isAiProcessing) return false;
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return false;
 
-    setThoughts(prev => [...prev, { id: Math.random().toString(36), type: 'text', content: input, timestamp: new Date() }]);
+    const visualText = displayText || input;
+    setThoughts(prev => [...prev, { id: Math.random().toString(36), type: 'text', content: visualText, timestamp: new Date() }]);
     setIsAiProcessing(true);
     try {
       socketRef.current.send(JSON.stringify({ input_text: input, session_id: sessionId, debug: true }));

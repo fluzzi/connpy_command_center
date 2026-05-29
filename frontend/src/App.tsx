@@ -25,6 +25,7 @@ function App() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showAiPanel, setShowAiPanel] = useState(true);
   const [activeAiTab, setActiveAiTab] = useState<'global' | 'terminal'>('global');
+  const [aiPanelWidth, setAiPanelWidth] = useState(380);
   const [copiedId, setCopiedId] = useState(false);
   const [isReadOnlyMode, setIsReadOnlyMode] = useState<boolean>(false);
   const [showExpiredModal, setShowExpiredModal] = useState<boolean>(false);
@@ -331,6 +332,81 @@ function App() {
     setActiveTabId(newId);
   };
 
+  const handleStartPlaybookAnalysis = (
+    playbookName: string, 
+    customPrompt: string, 
+    logs: any[]
+  ) => {
+    let promptParts = [
+      `architect Playbook Tactical Analysis: **${playbookName}**`,
+      "",
+      customPrompt.trim() ? `**Operator Query:**\n> ${customPrompt.trim()}` : `**Operator Query:**\n> Perform a full tactical audit of this playbook run and identify any issues.`,
+      "",
+      "### Playbook Execution Summary"
+    ];
+
+    const outputs = logs.filter(l => l.type === 'output');
+    const errors = logs.filter(l => l.type === 'error');
+    
+    promptParts.push(`- **Total Actions/Outputs:** ${outputs.length}`);
+    if (errors.length > 0) {
+      promptParts.push(`- **Critical Errors Encountered:** ${errors.length}`);
+    }
+
+    if (outputs.length > 0) {
+      promptParts.push("");
+      promptParts.push("| Node | Command | Status | Verification Pipelines |");
+      promptParts.push("| --- | --- | --- | --- |");
+      outputs.forEach(o => {
+        const nodeName = o.node || 'Global';
+        const cmdPreview = o.data ? o.data.split('\n')[0].substring(0, 50) : 'Unknown';
+        const statusText = o.status === 0 ? 'Success' : `Failed (${o.status})`;
+        
+        let verifyText = 'None';
+        if (o.result && Object.keys(o.result).length > 0) {
+          const totalVerif = Object.keys(o.result).length;
+          const passedVerif = Object.values(o.result).filter(Boolean).length;
+          verifyText = `${passedVerif}/${totalVerif} Passed`;
+        }
+        
+        promptParts.push(`| \`${nodeName}\` | \`${cmdPreview}\` | **${statusText}** | ${verifyText} |`);
+      });
+    }
+
+    if (outputs.length > 0) {
+      promptParts.push("");
+      promptParts.push("### Command Execution Outputs Context");
+      outputs.forEach(fo => {
+        promptParts.push(`#### Node: \`${fo.node || 'Unknown'}\` (Status: ${fo.status === 0 ? 'Success' : `Failed (${fo.status})`})`);
+        promptParts.push("```");
+        promptParts.push(fo.data || '');
+        promptParts.push("```");
+      });
+    }
+
+    if (errors.length > 0) {
+      promptParts.push("");
+      promptParts.push("### Critical System Logs");
+      errors.forEach(e => {
+        promptParts.push(`- \`${e.data}\``);
+      });
+    }
+
+    const fullPrompt = promptParts.join("\n");
+
+    setShowAiPanel(true);
+    setActiveAiTab('global');
+    setAiPanelWidth(570);
+    
+    const userVisualText = customPrompt.trim() 
+      ? `**Playbook Analysis Request:** ${customPrompt.trim()}\n\n*📎 Attached playbook execution logs (${outputs.length} actions)*`
+      : `**Playbook Analysis Request:** Perform a full tactical audit of this playbook run.\n\n*📎 Attached playbook execution logs (${outputs.length} actions)*`;
+
+    const sessionId = workspaceId || api.getActiveSessionId();
+    sendPrompt(fullPrompt, sessionId, userVisualText);
+  };
+
+
   const handleOpenTopology = (content: string) => {
     const tabId = `topo-${Math.random().toString(36).substring(7)}`;
     const newTab: Tab = { 
@@ -420,6 +496,8 @@ function App() {
     setUsername('');
     setTabs([]);
     setActiveTabId(null);
+    setIsReadOnlyMode(false);
+    setShowExpiredModal(false);
   };
 
   if (authRequired === null) {
@@ -436,6 +514,8 @@ function App() {
   if (authRequired && !isAuthenticated) {
     return <LoginPage onLoginSuccess={(user, token) => {
       setSessionToken(token);
+      setIsReadOnlyMode(false);
+      setShowExpiredModal(false);
       setIsAuthenticated(true);
       setUsername(user);
     }} />;
@@ -685,6 +765,7 @@ function App() {
                     <PlaybookResult 
                         playbookData={JSON.parse(tab.meta?.playbookData || '{}')} 
                         onClose={() => closeTab(tab.id)}
+                        onStartAnalysis={handleStartPlaybookAnalysis}
                     />
                   ) : tab.type === 'cloud_inspect' ? (
                     <CloudInspect
@@ -765,6 +846,8 @@ function App() {
               onOpenNode={handleOpenNode}
               onOpenTopology={handleOpenTopology}
               onConnpyLink={handleConnpyLink}
+              width={aiPanelWidth}
+              onWidthChange={setAiPanelWidth}
             />
           )}
         </div>
