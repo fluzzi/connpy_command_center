@@ -150,6 +150,30 @@ export const api = {
         return url.toString();
     },
 
+    getPlaybookBuilderWsUrl: () => {
+        const base = api.getWsBaseUrl();
+        const url = new URL(`${base}/ws/playbook/builder`);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
+        return url.toString();
+    },
+
+    getPlaybookAnalyzeWsUrl: () => {
+        const base = api.getWsBaseUrl();
+        const url = new URL(`${base}/ws/playbook/analyze`);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
+        return url.toString();
+    },
+
+    getPlaybookPreflightWsUrl: () => {
+        const base = api.getWsBaseUrl();
+        const url = new URL(`${base}/ws/playbook/preflight`);
+        const auth = getAuthParam();
+        url.searchParams.append(auth.name, auth.value);
+        return url.toString();
+    },
+
     runCommands: (nodes: string[], commands: string[], variables: any = {}, timeout: number = 10) => fetch(`${API_BASE}/api/run`, {
         method: 'POST',
         headers: getHeaders(),

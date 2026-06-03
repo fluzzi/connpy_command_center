@@ -297,5 +297,5 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
 
   const isConnected = socketRef.current?.readyState === WebSocket.OPEN;
 
-  return { thoughts, isAiProcessing, isConnected, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought, startNewSession };
+  return { thoughts, isAiProcessing, isConnected, setThoughts, setIsAiProcessing, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought, startNewSession };
 }

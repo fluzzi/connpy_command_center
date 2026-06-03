@@ -8,6 +8,8 @@ import CloudGraph from './components/CloudGraph';
 import AIPanel from './components/AIPanel';
 import { PlaybookEditor } from './components/PlaybookEditor';
 import { PlaybookResult } from './components/PlaybookResult';
+import { PlaybookPreflight } from './components/PlaybookPreflight';
+import { PlaybookAnalysis } from './components/PlaybookAnalysis';
 import { api } from './api';
 import { useAISession } from './hooks/useAISession';
 import { useWorkspace } from './hooks/useWorkspace';
@@ -332,78 +334,49 @@ function App() {
     setActiveTabId(newId);
   };
 
+  const handleOpenPlaybookPreflight = (playbookData: any) => {
+    const newId = `preflight-${Math.random().toString(36).substring(7)}`;
+    const newTab: Tab = { 
+        id: newId, 
+        nodeId: `Preflight: ${playbookData.playbook || 'Simulation'}`, 
+        type: 'playbook_preflight',
+        meta: { playbookData: JSON.stringify(playbookData) }
+    };
+    updateTabsAndPush([...tabs, newTab]);
+    setActiveTabId(newId);
+  };
+
   const handleStartPlaybookAnalysis = (
     playbookName: string, 
     customPrompt: string, 
     logs: any[]
   ) => {
-    let promptParts = [
-      `architect Playbook Tactical Analysis: **${playbookName}**`,
-      "",
-      customPrompt.trim() ? `**Operator Query:**\n> ${customPrompt.trim()}` : `**Operator Query:**\n> Perform a full tactical audit of this playbook run and identify any issues.`,
-      "",
-      "### Playbook Execution Summary"
-    ];
-
+    console.log("Analyzing playbook:", playbookName);
     const outputs = logs.filter(l => l.type === 'output');
-    const errors = logs.filter(l => l.type === 'error');
     
-    promptParts.push(`- **Total Actions/Outputs:** ${outputs.length}`);
-    if (errors.length > 0) {
-      promptParts.push(`- **Critical Errors Encountered:** ${errors.length}`);
-    }
+    // Build the results dictionary matching connpy structure
+    const resultsDict: Record<string, any> = {};
+    outputs.forEach(o => {
+      resultsDict[o.node || 'global'] = {
+        output: o.data || '',
+        status: o.status || 0,
+        result: o.result || {}
+      };
+    });
 
-    if (outputs.length > 0) {
-      promptParts.push("");
-      promptParts.push("| Node | Command | Status | Verification Pipelines |");
-      promptParts.push("| --- | --- | --- | --- |");
-      outputs.forEach(o => {
-        const nodeName = o.node || 'Global';
-        const cmdPreview = o.data ? o.data.split('\n')[0].substring(0, 50) : 'Unknown';
-        const statusText = o.status === 0 ? 'Success' : `Failed (${o.status})`;
-        
-        let verifyText = 'None';
-        if (o.result && Object.keys(o.result).length > 0) {
-          const totalVerif = Object.keys(o.result).length;
-          const passedVerif = Object.values(o.result).filter(Boolean).length;
-          verifyText = `${passedVerif}/${totalVerif} Passed`;
+    const newId = `analysis-${Math.random().toString(36).substring(7)}`;
+    const newTab: Tab = { 
+        id: newId, 
+        nodeId: `Analysis: ${playbookName}`, 
+        type: 'playbook_analysis',
+        meta: { 
+            playbookName, 
+            customPrompt, 
+            results: JSON.stringify(resultsDict)
         }
-        
-        promptParts.push(`| \`${nodeName}\` | \`${cmdPreview}\` | **${statusText}** | ${verifyText} |`);
-      });
-    }
-
-    if (outputs.length > 0) {
-      promptParts.push("");
-      promptParts.push("### Command Execution Outputs Context");
-      outputs.forEach(fo => {
-        promptParts.push(`#### Node: \`${fo.node || 'Unknown'}\` (Status: ${fo.status === 0 ? 'Success' : `Failed (${fo.status})`})`);
-        promptParts.push("```");
-        promptParts.push(fo.data || '');
-        promptParts.push("```");
-      });
-    }
-
-    if (errors.length > 0) {
-      promptParts.push("");
-      promptParts.push("### Critical System Logs");
-      errors.forEach(e => {
-        promptParts.push(`- \`${e.data}\``);
-      });
-    }
-
-    const fullPrompt = promptParts.join("\n");
-
-    setShowAiPanel(true);
-    setActiveAiTab('global');
-    setAiPanelWidth(570);
-    
-    const userVisualText = customPrompt.trim() 
-      ? `**Playbook Analysis Request:** ${customPrompt.trim()}\n\n*📎 Attached playbook execution logs (${outputs.length} actions)*`
-      : `**Playbook Analysis Request:** Perform a full tactical audit of this playbook run.\n\n*📎 Attached playbook execution logs (${outputs.length} actions)*`;
-
-    const sessionId = workspaceId || api.getActiveSessionId();
-    sendPrompt(fullPrompt, sessionId, userVisualText);
+    };
+    updateTabsAndPush([...tabs, newTab]);
+    setActiveTabId(newId);
   };
 
 
@@ -760,12 +733,28 @@ function App() {
                       }}
                     />
                   ) : tab.type === 'playbook_editor' ? (
-                    <PlaybookEditor onRun={handleOpenPlaybookResult} availableNodes={availableNodes} />
+                    <PlaybookEditor 
+                        onRun={handleOpenPlaybookResult} 
+                        onPreflight={handleOpenPlaybookPreflight}
+                        availableNodes={availableNodes} 
+                    />
+                  ) : tab.type === 'playbook_preflight' ? (
+                    <PlaybookPreflight 
+                        playbookData={JSON.parse(tab.meta?.playbookData || '{}')} 
+                        onClose={() => closeTab(tab.id)}
+                    />
                   ) : tab.type === 'playbook_result' ? (
                     <PlaybookResult 
                         playbookData={JSON.parse(tab.meta?.playbookData || '{}')} 
                         onClose={() => closeTab(tab.id)}
                         onStartAnalysis={handleStartPlaybookAnalysis}
+                    />
+                  ) : tab.type === 'playbook_analysis' ? (
+                    <PlaybookAnalysis 
+                        playbookName={tab.meta?.playbookName || ''}
+                        customPrompt={tab.meta?.customPrompt || ''}
+                        results={JSON.parse(tab.meta?.results || '{}')}
+                        onClose={() => closeTab(tab.id)}
                     />
                   ) : tab.type === 'cloud_inspect' ? (
                     <CloudInspect

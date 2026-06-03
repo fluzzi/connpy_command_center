@@ -28,6 +28,19 @@ export const VariableMatrix: React.FC = () => {
           });
         }
       });
+
+      // Extract variables from expected criteria
+      if (task.expected) {
+        task.expected.forEach(exp => {
+          const matches = exp.match(/\{([^}]+)\}/g);
+          if (matches) {
+            matches.forEach(m => {
+              const cleanVar = m.replace(/[{}]/g, '');
+              varSet.add(cleanVar);
+            });
+          }
+        });
+      }
     });
 
     // Also include any targets that already have stored variables (useful for imported playbooks)

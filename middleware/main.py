@@ -576,7 +576,7 @@ class SharedAIManager:
                 stub = connpy_pb2_grpc.AIServiceStub(channel)
                 input_queue = asyncio.Queue()
                 
-                valid_fields = {f.name for f in connpy_pb2.AskRequest.DESCRIPTOR.fields}
+                valid_fields = {f.name for f in connpy_pb2.AskRequest.DESCRIPTOR.fields} - {"chat_history"}
                 
                 async def request_generator():
                     while True:
@@ -751,7 +751,7 @@ async def ai_websocket_endpoint(websocket: WebSocket):
         stub = connpy_pb2_grpc.AIServiceStub(channel)
         input_queue = asyncio.Queue()
         
-        valid_fields = {f.name for f in connpy_pb2.AskRequest.DESCRIPTOR.fields}
+        valid_fields = {f.name for f in connpy_pb2.AskRequest.DESCRIPTOR.fields} - {"chat_history"}
         
         async def request_generator():
             while True:
@@ -1381,6 +1381,261 @@ async def playbook_websocket_endpoint(websocket: WebSocket, token: str = Query(N
     except Exception as e:
         try:
             await websocket.send_json({"type": "error", "data": f"System Level Error: {str(e)}"})
+        except:
+            pass
+    finally:
+        if websocket.client_state.name != "DISCONNECTED":
+            await websocket.close()
+
+async def resolve_nodes_via_grpc(node_filters, node_stub, metadata):
+    if isinstance(node_filters, str):
+        node_filters = [node_filters]
+    resolved = []
+    for pattern in node_filters:
+        try:
+            resp = await node_stub.list_nodes(connpy_pb2.FilterRequest(filter_str=pattern), metadata=metadata)
+            if resp.data.HasField("list_value"):
+                for v in resp.data.list_value.values:
+                    name = v.string_value
+                    if name not in resolved:
+                        resolved.append(name)
+        except Exception as e:
+            print(f"Error resolving pattern '{pattern}': {e}")
+    return resolved
+
+@app.websocket("/ws/playbook/builder")
+async def playbook_builder_websocket_endpoint(websocket: WebSocket, token: str = Query(None), api_key: str = Query(None)):
+    auth_token = token or api_key
+    is_authorized = False
+    username = None
+
+    if auth_token == API_KEY:
+        is_authorized = True
+    elif auth_token:
+        try:
+            import jwt
+            payload = jwt.decode(auth_token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    
+    metadata = [("authorization", f"Bearer {auth_token}")] if username and auth_token else []
+    
+    try:
+        async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+            stub = connpy_pb2_grpc.AIServiceStub(channel)
+            input_queue = asyncio.Queue()
+            
+            valid_fields = {f.name for f in connpy_pb2.AskRequest.DESCRIPTOR.fields} - {"chat_history"}
+            
+            async def request_generator():
+                while True:
+                    data = await input_queue.get()
+                    if data is None: break
+                    filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+                    yield connpy_pb2.AskRequest(**filtered_data)
+
+            call = stub.build_playbook_chat(request_generator(), metadata=metadata)
+            
+            async def read_from_websocket():
+                try:
+                    while True:
+                        data = await websocket.receive_json()
+                        await input_queue.put(data)
+                except Exception:
+                    await input_queue.put(None)
+                    
+            async def write_to_websocket():
+                try:
+                    async for response in call:
+                        resp_dict = {
+                            "text_chunk": response.text_chunk,
+                            "is_final": response.is_final,
+                            "status_update": response.status_update,
+                            "debug_message": response.debug_message,
+                            "requires_confirmation": response.requires_confirmation,
+                            "important_message": response.important_message,
+                            "full_result": MessageToDict(response.full_result) if response.is_final else None
+                        }
+                        await websocket.send_json(resp_dict)
+                except asyncio.CancelledError:
+                    pass
+                except grpc.aio.AioRpcError as e:
+                    if e.code() not in (grpc.StatusCode.CANCELLED, grpc.StatusCode.UNAVAILABLE):
+                        print(f"Playbook builder gRPC error: {e}")
+                except Exception as e:
+                    print(f"Error writing to playbook builder websocket: {e}")
+                finally:
+                    await input_queue.put(None)
+                    
+            await asyncio.gather(read_from_websocket(), write_to_websocket())
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": f"Builder Error: {str(e)}"})
+        except:
+            pass
+    finally:
+        if websocket.client_state.name != "DISCONNECTED":
+            await websocket.close()
+
+@app.websocket("/ws/playbook/analyze")
+async def playbook_analyze_websocket_endpoint(websocket: WebSocket, token: str = Query(None), api_key: str = Query(None)):
+    auth_token = token or api_key
+    is_authorized = False
+    username = None
+
+    if auth_token == API_KEY:
+        is_authorized = True
+    elif auth_token:
+        try:
+            import jwt
+            payload = jwt.decode(auth_token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    
+    metadata = [("authorization", f"Bearer {auth_token}")] if username and auth_token else []
+    
+    try:
+        data = await websocket.receive_json()
+        results = data.get("results", {})
+        query = data.get("query", "")
+        
+        async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+            stub = connpy_pb2_grpc.AIServiceStub(channel)
+            req = connpy_pb2.AnalyzeRequest(
+                results=dict_to_struct(results),
+                query=query
+            )
+            
+            async for response in stub.analyze_execution_results(req, metadata=metadata):
+                resp_dict = {
+                    "text_chunk": response.text_chunk,
+                    "is_final": response.is_final,
+                    "status_update": response.status_update,
+                    "debug_message": response.debug_message,
+                    "requires_confirmation": response.requires_confirmation,
+                    "important_message": response.important_message,
+                    "full_result": MessageToDict(response.full_result) if response.is_final else None
+                }
+                await websocket.send_json(resp_dict)
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        pass
+    except grpc.aio.AioRpcError as e:
+        if e.code() not in (grpc.StatusCode.CANCELLED, grpc.StatusCode.UNAVAILABLE):
+            print(f"Analyze gRPC error: {e}")
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": f"Analysis Error: {str(e)}"})
+        except:
+            pass
+    finally:
+        if websocket.client_state.name != "DISCONNECTED":
+            await websocket.close()
+
+@app.websocket("/ws/playbook/preflight")
+async def playbook_preflight_websocket_endpoint(websocket: WebSocket, token: str = Query(None), api_key: str = Query(None)):
+    auth_token = token or api_key
+    is_authorized = False
+    username = None
+
+    if auth_token == API_KEY:
+        is_authorized = True
+    elif auth_token:
+        try:
+            import jwt
+            payload = jwt.decode(auth_token, options={"verify_signature": False})
+            username = payload.get("sub")
+            if username:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    
+    metadata = [("authorization", f"Bearer {auth_token}")] if username and auth_token else []
+    
+    try:
+        data = await websocket.receive_json()
+        playbook = data.get("playbook", {})
+        tasks = playbook.get("tasks", [])
+        
+        async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+            node_stub = connpy_pb2_grpc.NodeServiceStub(channel)
+            ai_stub = connpy_pb2_grpc.AIServiceStub(channel)
+            
+            for task_index, task in enumerate(tasks):
+                name = task.get("name", f"Task {task_index + 1}")
+                nodelist = task.get("nodes", [])
+                commands = task.get("commands", [])
+                
+                resolved_names = await resolve_nodes_via_grpc(nodelist, node_stub, metadata)
+                
+                await websocket.send_json({
+                    "type": "task_start",
+                    "task_name": name,
+                    "nodes": resolved_names
+                })
+                
+                if not resolved_names:
+                    await websocket.send_json({
+                        "type": "text",
+                        "text_chunk": "*Simulation skipped: No nodes matched the criteria.*\n\n"
+                    })
+                    continue
+                
+                req = connpy_pb2.PreflightRequest(
+                    target_nodes=resolved_names,
+                    commands=commands
+                )
+                
+                async for response in ai_stub.predict_execution_results(req, metadata=metadata):
+                    resp_dict = {
+                        "type": "text",
+                        "text_chunk": response.text_chunk,
+                        "is_final": response.is_final,
+                        "status_update": response.status_update,
+                        "debug_message": response.debug_message,
+                        "important_message": response.important_message,
+                        "full_result": MessageToDict(response.full_result) if response.is_final else None
+                    }
+                    await websocket.send_json(resp_dict)
+                    
+            await websocket.send_json({"type": "completed"})
+            
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        pass
+    except grpc.aio.AioRpcError as e:
+        if e.code() not in (grpc.StatusCode.CANCELLED, grpc.StatusCode.UNAVAILABLE):
+            print(f"Preflight gRPC error: {e}")
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "data": f"Preflight Error: {str(e)}"})
         except:
             pass
     finally:
