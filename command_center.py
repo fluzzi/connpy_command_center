@@ -52,6 +52,7 @@ def run_command_center(path, dev=False, port=8000, grpc_target="127.0.0.1:8048")
     
     if dev:
         os.environ["COMMAND_CENTER_DEV"] = "1"
+        os.environ["CONN_DEV"] = "1"
         env = os.environ.copy()
         env["VITE_API_URL"] = f"http://localhost:{port}"
         frontend_proc = subprocess.Popen(["npm", "run", "dev"], cwd=frontend_dir, env=env)

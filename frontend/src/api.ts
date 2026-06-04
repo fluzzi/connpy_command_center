@@ -8,7 +8,7 @@ const getApiPort = () => {
 };
 
 export const API_BASE = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}${getApiPort() ? ':' + getApiPort() : ''}`;
-export const API_KEY = import.meta.env.VITE_API_KEY || 'connpy-dev-key-12345';
+export const API_KEY = import.meta.env.VITE_CONN_API_KEY || import.meta.env.VITE_API_KEY || 'connpy-dev-key-12345';
 
 export const getHeaders = () => {
     const token = localStorage.getItem('connpy_session_token');
@@ -49,6 +49,10 @@ export const api = {
     },
 
     getAuthStatus: () => fetch(`${API_BASE}/api/auth/status`).then(r => r.json()),
+    getSsoProviders: () => fetch(`${API_BASE}/api/auth/sso/providers`).then(async r => {
+        if (!r.ok) throw new Error("Failed to fetch SSO providers");
+        return r.json();
+    }),
 
     getMe: () => fetch(`${API_BASE}/api/auth/me`, { headers: getHeaders() }).then(async r => {
         if (!r.ok) {
@@ -66,6 +70,18 @@ export const api = {
         if (!r.ok) {
             const err = await r.json().catch(() => ({}));
             throw new Error(err.detail || 'Login failed');
+        }
+        return r.json();
+    }),
+
+    loginSso: (idToken: string, provider: string, username?: string, redirectUri?: string) => fetch(`${API_BASE}/api/auth/sso`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: idToken, provider, username: username || '', redirect_uri: redirectUri, flow: 'code' })
+    }).then(async r => {
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.detail || 'SSO authentication failed');
         }
         return r.json();
     }),

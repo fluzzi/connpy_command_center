@@ -1,16 +1,44 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Terminal, Shield, Lock, User, AlertCircle, Cpu } from 'lucide-react';
-import { api } from '../api';
+import { api, API_BASE } from '../api';
 
 interface LoginPageProps {
   onLoginSuccess: (username: string, token: string) => void;
+  initialError?: string | null;
 }
 
-export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
+export default function LoginPage({ onLoginSuccess, initialError }: LoginPageProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError || null);
+
+  useEffect(() => {
+    if (initialError) {
+      setError(initialError);
+    }
+  }, [initialError]);
+  const [ssoProviders, setSsoProviders] = useState<string[]>([]);
+
+  useEffect(() => {
+    api.getSsoProviders()
+      .then(res => {
+        if (res && res.providers) {
+          setSsoProviders(res.providers);
+        }
+      })
+      .catch(err => {
+        console.error("Failed to load SSO providers:", err);
+      });
+  }, []);
+
+  const handleSsoLogin = (provider: string) => {
+    setError(null);
+    setIsLoading(true);
+    // Save the provider to recover it on callback
+    localStorage.setItem('sso_provider', provider);
+    window.location.href = `${API_BASE}/api/auth/sso/login?provider=${provider}&redirect_uri=${encodeURIComponent(window.location.origin)}`;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,6 +81,21 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
     fontWeight: '600',
     boxSizing: 'border-box',
     transition: 'border-color 0.15s, box-shadow 0.15s',
+  };
+
+  const ssoButtonStyle: React.CSSProperties = {
+    width: '100%',
+    paddingTop: '0.75rem', paddingBottom: '0.75rem',
+    background: 'rgba(76,86,106,0.3)',
+    border: '1px solid rgba(76,86,106,0.6)',
+    borderRadius: '0.5rem',
+    color: '#d8dee9',
+    fontWeight: 900, fontSize: '0.65rem',
+    textTransform: 'uppercase', letterSpacing: '0.1em',
+    cursor: isLoading ? 'not-allowed' : 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+    transition: 'background 0.15s, border-color 0.15s',
+    boxSizing: 'border-box',
   };
 
   return (
@@ -221,6 +264,37 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
             )}
           </button>
         </form>
+
+        {/* SSO Buttons */}
+        {ssoProviders.length > 0 && (
+          <>
+            {/* Divider */}
+            <div style={{ display: 'flex', alignItems: 'center', margin: '1.5rem 0', opacity: 0.5 }}>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(76,86,106,0.6)' }} />
+              <span style={{ padding: '0 0.75rem', fontSize: '0.6rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#81a1c1' }}>OR</span>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(76,86,106,0.6)' }} />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+              {ssoProviders.map((provider) => {
+                const displayName = `${provider.charAt(0).toUpperCase() + provider.slice(1)} SSO`;
+
+                return (
+                  <button
+                    key={provider}
+                    onClick={() => handleSsoLogin(provider)}
+                    disabled={isLoading}
+                    style={ssoButtonStyle}
+                    onMouseEnter={(e) => { if (!isLoading) { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(76,86,106,0.5)'; } }}
+                    onMouseLeave={(e) => { if (!isLoading) { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(76,86,106,0.3)'; } }}
+                  >
+                    <Shield size={12} style={{ color: '#88c0d0' }} /> {displayName}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {/* Footer */}
         <div style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.55rem', fontWeight: 900, letterSpacing: '0.15em', color: '#4c566a', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>

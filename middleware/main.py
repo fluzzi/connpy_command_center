@@ -34,14 +34,43 @@ async def grpc_exception_handler(request: Request, exc: grpc.aio.AioRpcError):
         content={"detail": f"gRPC Error: {exc.details()}"}
     )
 
-API_KEY = "connpy-dev-key-12345"
+API_KEY = os.getenv("CONN_API_KEY") or os.getenv("VITE_CONN_API_KEY") or os.getenv("VITE_API_KEY")
 env_path = os.path.join(os.path.dirname(__file__), "../frontend/.env")
 if os.path.exists(env_path):
     with open(env_path, "r") as f:
         for line in f:
             line = line.strip()
-            if line.startswith("VITE_API_KEY="):
-                API_KEY = line.split("=", 1)[1]
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k not in os.environ:
+                    os.environ[k] = v
+                if k.startswith("VITE_"):
+                    clean_k = k[5:]
+                    if clean_k not in os.environ:
+                        os.environ[clean_k] = v
+                if k in ("CONN_API_KEY", "VITE_CONN_API_KEY", "VITE_API_KEY"):
+                    API_KEY = v
+
+if not API_KEY:
+    if os.getenv("CONN_DEV") or os.getenv("COMMAND_CENTER_DEV"):
+        API_KEY = "connpy-dev-key-12345"
+    else:
+        raise RuntimeError(
+            "CRITICAL SECURITY ERROR: CONN_API_KEY environment variable is not defined. "
+            "You must configure a secure CONN_API_KEY in your production environment."
+        )
+
+GATEWAY_SECRET = os.getenv("CONN_SSO_GATEWAY_SECRET")
+if not GATEWAY_SECRET:
+    if os.getenv("CONN_DEV") or os.getenv("COMMAND_CENTER_DEV"):
+        GATEWAY_SECRET = "default-sso-gateway-secret-12345"
+    else:
+        raise RuntimeError(
+            "CRITICAL SECURITY ERROR: CONN_SSO_GATEWAY_SECRET environment variable is not defined. "
+            "You must configure a secure CONN_SSO_GATEWAY_SECRET in your production environment."
+        )
 
 async def verify_api_key(api_key: str = Query(None), authorization: str = Header(None)):
     token = api_key
@@ -82,7 +111,40 @@ async def get_version():
     return {"version": __version__}
 
 @app.get("/api/auth/status")
-async def get_auth_status():
+async def get_auth_status(request: Request):
+    # 1. Check if we are running behind an SSO proxy (Traefik/Authelia) with Forward Auth
+    remote_user = request.headers.get("Remote-User") or request.headers.get("X-Forwarded-User")
+    if remote_user:
+        try:
+            # Generate a temporary trusted gateway token
+            import jwt
+            import datetime
+            gateway_secret = GATEWAY_SECRET
+            payload = {
+                "sub": remote_user,
+                "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
+            }
+            gateway_token = jwt.encode(payload, gateway_secret, algorithm="HS256")
+            
+            # Exchange gateway token for a native connpy token
+            async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+                stub = connpy_pb2_grpc.AuthServiceStub(channel)
+                resp = await stub.login_sso(connpy_pb2.LoginSSORequest(
+                    username=remote_user,
+                    id_token=gateway_token,
+                    provider="trusted_gateway"
+                ))
+                return {
+                    "auth_required": False,
+                    "sso_auto_login": True,
+                    "token": resp.token,
+                    "username": resp.username,
+                    "expires_at": resp.expires_at
+                }
+        except Exception as e:
+            # Fallback to standard flow if SSO header login fails
+            pass
+
     try:
         async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
             stub = connpy_pb2_grpc.NodeServiceStub(channel)
@@ -118,6 +180,114 @@ async def login(request: Request):
             if e.code() == grpc.StatusCode.UNAUTHENTICATED:
                 raise HTTPException(status_code=401, detail="Invalid username or password")
             raise HTTPException(status_code=500, detail=f"gRPC Error: {e.details()}")
+
+@app.get("/api/auth/sso/login")
+async def sso_redirect(provider: str, redirect_uri: str):
+    prov_upper = provider.upper()
+    client_id = os.getenv(f"CONN_SSO_{prov_upper}_CLIENT_ID")
+    auth_url_base = os.getenv(f"CONN_SSO_{prov_upper}_AUTH_URL")
+    scope = os.getenv(f"CONN_SSO_{prov_upper}_SCOPE", "openid email profile")
+
+    if not client_id or not auth_url_base:
+        raise HTTPException(
+            status_code=400,
+            detail=f"SSO Provider '{provider}' not configured in middleware environment. "
+                   f"Please set CONN_SSO_{prov_upper}_CLIENT_ID and CONN_SSO_{prov_upper}_AUTH_URL."
+        )
+
+    auth_url = f"{auth_url_base}?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&scope={scope}&state={provider}"
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(auth_url)
+
+
+@app.get("/api/auth/sso/providers")
+async def get_sso_providers():
+    async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+        stub = connpy_pb2_grpc.AuthServiceStub(channel)
+        try:
+            from google.protobuf.empty_pb2 import Empty
+            resp = await stub.get_sso_providers(Empty())
+            return {"providers": list(resp.providers)}
+        except grpc.aio.AioRpcError as e:
+            raise HTTPException(status_code=500, detail=f"gRPC Error: {e.details()}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/sso")
+async def login_sso(request: Request):
+    data = await request.json()
+    id_token = data.get("id_token")
+    provider = data.get("provider")
+    username = data.get("username", "")
+
+    if not id_token or not provider:
+        raise HTTPException(status_code=400, detail="id_token and provider are required")
+
+    # If the token is a code (Authorization Code Flow):
+    # We exchange it for an actual id_token first!
+    flow = data.get("flow")
+    is_code_flow = False
+    if flow == "code":
+        is_code_flow = True
+    elif flow == "token":
+        is_code_flow = False
+    else:
+        is_code_flow = not id_token.startswith("ey")
+
+    if is_code_flow:
+        import httpx
+        try:
+            prov_upper = provider.upper()
+            client_id = os.getenv(f"CONN_SSO_{prov_upper}_CLIENT_ID")
+            client_secret = os.getenv(f"CONN_SSO_{prov_upper}_CLIENT_SECRET")
+            token_endpoint = os.getenv(f"CONN_SSO_{prov_upper}_TOKEN_URL")
+
+            if not (client_id and client_secret and token_endpoint):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"SSO Provider credentials or endpoint missing for '{provider}'. "
+                           f"Ensure CONN_SSO_{prov_upper}_CLIENT_ID, CONN_SSO_{prov_upper}_CLIENT_SECRET, and CONN_SSO_{prov_upper}_TOKEN_URL are set."
+                )
+
+            redirect_uri = data.get("redirect_uri") or f"{request.base_url}"
+            
+            # Ensure redirect_uri matches OIDC expectations (usually needs to be exactly what frontend passed)
+            async with httpx.AsyncClient() as client:
+                res = await client.post(token_endpoint, data={
+                    "code": id_token,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code"
+                })
+                res_data = res.json()
+                if res.status_code != 200:
+                    raise HTTPException(status_code=400, detail=f"{provider.capitalize()} token exchange failed: {res_data.get('error_description') or res_data.get('error')}")
+                id_token = res_data.get("id_token")
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(status_code=400, detail=f"Failed to exchange {provider} code: {str(e)}")
+
+    async with grpc.aio.insecure_channel(GRPC_SERVER_ADDRESS) as channel:
+        stub = connpy_pb2_grpc.AuthServiceStub(channel)
+        try:
+            resp = await stub.login_sso(connpy_pb2.LoginSSORequest(
+                username=username,
+                id_token=id_token,
+                provider=provider
+            ))
+            return {
+                "token": resp.token,
+                "username": resp.username,
+                "expires_at": resp.expires_at
+            }
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.UNAUTHENTICATED:
+                raise HTTPException(status_code=401, detail=f"SSO authentication failed: {e.details()}")
+            raise HTTPException(status_code=500, detail=f"gRPC Error: {e.details()}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/auth/me")
 async def get_me(auth: dict = Depends(verify_api_key)):
@@ -1708,7 +1878,7 @@ async def api_test_commands(request: Request, auth: dict = Depends(verify_api_ke
 
 from fastapi.staticfiles import StaticFiles
 frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "../frontend/dist"))
-if os.path.exists(frontend_dist) and not os.environ.get("COMMAND_CENTER_DEV"):
+if os.path.exists(frontend_dist) and not (os.getenv("CONN_DEV") or os.getenv("COMMAND_CENTER_DEV")):
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ function App() {
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [username, setUsername] = useState<string>('');
+  const [ssoError, setSsoError] = useState<string | null>(null);
 
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -82,8 +83,49 @@ function App() {
 
   // Probe Auth Status on Boot
   useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const stateProvider = urlParams.get('state') || localStorage.getItem('sso_provider') || '';
+
+    if (code) {
+      // Clear URL params to avoid exchange loops on page refreshes
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setAuthRequired(null); // Show loading handshake screen during exchange
+      
+      api.loginSso(code, stateProvider, undefined, window.location.origin)
+        .then(res => {
+          setSsoError(null);
+          localStorage.removeItem('sso_provider');
+          localStorage.setItem('connpy_session_token', res.token);
+          localStorage.setItem('connpy_username', res.username);
+          setSessionToken(res.token);
+          setAuthRequired(true);
+          setIsAuthenticated(true);
+          setUsername(res.username);
+        })
+        .catch(err => {
+          localStorage.removeItem('sso_provider');
+          console.error("SSO Token Exchange failed:", err);
+          setSsoError(err.message || 'SSO authentication failed');
+          setIsAuthenticated(false);
+          setAuthRequired(true);
+        });
+      return;
+    }
+
     api.getAuthStatus()
       .then(res => {
+        if (res.token) {
+          // SSO Auto-login (Forward Auth headers detected)
+          localStorage.setItem('connpy_session_token', res.token);
+          localStorage.setItem('connpy_username', res.username);
+          setSessionToken(res.token);
+          setAuthRequired(true);
+          setIsAuthenticated(true);
+          setUsername(res.username);
+          return;
+        }
+
         setAuthRequired(res.auth_required);
         if (res.auth_required) {
           const token = localStorage.getItem('connpy_session_token');
@@ -485,13 +527,17 @@ function App() {
   }
 
   if (authRequired && !isAuthenticated) {
-    return <LoginPage onLoginSuccess={(user, token) => {
-      setSessionToken(token);
-      setIsReadOnlyMode(false);
-      setShowExpiredModal(false);
-      setIsAuthenticated(true);
-      setUsername(user);
-    }} />;
+    return <LoginPage 
+      initialError={ssoError}
+      onLoginSuccess={(user, token) => {
+        setSsoError(null);
+        setSessionToken(token);
+        setIsReadOnlyMode(false);
+        setShowExpiredModal(false);
+        setIsAuthenticated(true);
+        setUsername(user);
+      }} 
+    />;
   }
 
   return (
