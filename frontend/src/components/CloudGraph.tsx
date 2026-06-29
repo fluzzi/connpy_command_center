@@ -241,6 +241,12 @@ export default function CloudGraph({ identifier, profile, region, metricType, on
                 <option className="bg-[#2e3440] text-[#d8dee9]" value={6}>Last 6 Hours</option>
                 <option className="bg-[#2e3440] text-[#d8dee9]" value={12}>Last 12 Hours</option>
                 <option className="bg-[#2e3440] text-[#d8dee9]" value={24}>Last 24 Hours</option>
+                <option className="bg-[#2e3440] text-[#d8dee9]" value={48}>Last 2 Days</option>
+                <option className="bg-[#2e3440] text-[#d8dee9]" value={72}>Last 3 Days</option>
+                <option className="bg-[#2e3440] text-[#d8dee9]" value={168}>Last 1 Week</option>
+                <option className="bg-[#2e3440] text-[#d8dee9]" value={336}>Last 2 Weeks</option>
+                <option className="bg-[#2e3440] text-[#d8dee9]" value={504}>Last 3 Weeks</option>
+                <option className="bg-[#2e3440] text-[#d8dee9]" value={720}>Last 1 Month</option>
             </select>
             
             {metricType === 'bw' && (
