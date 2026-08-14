@@ -643,6 +643,17 @@ export default function AIPanel({
                           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents} urlTransform={markdownUrlTransform}>
                             {thought.content || ''}
                           </ReactMarkdown>
+
+                          {thought.notes && (
+                            <details className="mt-3 mb-2 text-[11px] font-mono text-[#d8dee9]/80 bg-[#1e222a]/70 p-3 rounded-lg border border-[#3b4252] group">
+                              <summary className="cursor-pointer font-bold text-[#81a1c1] hover:text-[#88c0d0] select-none flex items-center gap-2 text-[10px] uppercase tracking-wider">
+                                <span>🧠 Internal Agent Notes / Memory</span>
+                              </summary>
+                              <div className="mt-2 pt-2 border-t border-[#3b4252]/60 whitespace-pre-wrap leading-relaxed text-[#d8dee9]/70">
+                                {thought.notes}
+                              </div>
+                            </details>
+                          )}
                         </div>
                       )}
                     </div>

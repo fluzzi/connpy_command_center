@@ -1142,7 +1142,8 @@ class SharedTerminalManager:
                                         )
                                     elif payload.get("type") == "copilot_action":
                                         yield connpy_pb2.InteractRequest(
-                                            copilot_action=payload.get("action", "")
+                                            copilot_action=payload.get("action", ""),
+                                            copilot_node_info_json=payload.get("node_info_json", "")
                                         )
                                 except: pass
                                 continue
@@ -1381,7 +1382,8 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, session_id: str
                                     ))
                                 elif data.get("type") == "copilot_action":
                                     await input_queue.put(connpy_pb2.InteractRequest(
-                                        copilot_action=data.get("action", "")
+                                        copilot_action=data.get("action", ""),
+                                        copilot_node_info_json=data.get("node_info_json", "")
                                     ))
                             except Exception as e:
                                 print(f"Error parsing Copilot JSON: {e}")

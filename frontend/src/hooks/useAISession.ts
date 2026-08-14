@@ -55,6 +55,7 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
       } else if (payload.type === 'copilot_response_json') {
         setIsAiProcessing(false);
         const result = payload.data;
+        console.log('Phase 2 Hook: AI Copilot Response Received ->', result);
         
         // If no commands, notify terminal to "continue" and reopen input
         const hasCommands = result.commands && result.commands.length > 0;
@@ -75,7 +76,8 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
             // Update the guide message
             updated[updated.length - 1] = { 
               ...last, 
-              content: result.guide || last.content
+              content: result.guide || last.content,
+              notes: result.notes || last.notes
             };
             
             // If there are commands, append the Action Card as a separate NEW thought
@@ -100,6 +102,7 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
               id: Math.random().toString(36),
               type: (currentResponderRef.current || 'engineer') as any,
               content: result.guide,
+              notes: result.notes,
               timestamp: new Date(),
               nodeId
             });

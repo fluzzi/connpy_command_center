@@ -10,6 +10,7 @@ export interface AiThought {
   id: string;
   type: 'status' | 'debug' | 'text' | 'confirm' | 'tool' | 'engineer' | 'architect' | 'important';
   content: string;
+  notes?: string;
   timestamp: Date;
   requires_confirmation?: boolean;
   tool_name?: string;

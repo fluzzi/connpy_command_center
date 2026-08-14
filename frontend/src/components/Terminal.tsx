@@ -39,7 +39,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   const contextModeRef = useRef(contextMode);
   useEffect(() => { contextModeRef.current = contextMode; }, [contextMode]);
 
-  const [visualCommandMarkers, setVisualCommandMarkers] = useState<{pos: number, marker: any}[]>([]);
+  const [visualCommandMarkers, setVisualCommandMarkers] = useState<{ pos: number, marker: any }[]>([]);
   const lastEnterRef = useRef<{ line: number, time: number } | null>(null);
 
   const [persona, setPersona] = useState<Persona>('engineer');
@@ -50,11 +50,18 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   const [os, setOs] = useState('linux');
   const [matchedPrompt, setMatchedPrompt] = useState('>$|#$|\\$$|>.$|#.$|\\$.$');
   const [contextLines, setContextLines] = useState(50);
+  const contextLinesRef = useRef(contextLines);
+  useEffect(() => { contextLinesRef.current = contextLines; }, [contextLines]);
+
   const [contextBlocks, setContextBlocks] = useState(1);
-  const [remoteBlocks, setRemoteBlocks] = useState<{startPos: number, endPos: number, startPreview: string}[]>([]);
+  const contextBlocksRef = useRef(contextBlocks);
+  useEffect(() => { contextBlocksRef.current = contextBlocks; }, [contextBlocks]);
+  const [remoteBlocks, setRemoteBlocks] = useState<{ startPos: number, endPos: number, startPreview: string }[]>([]);
   const [memories, setMemories] = useState<string[]>([]);
   const [interactionHistory, setInteractionHistory] = useState<string[]>([]);
   const [copilotSessionId, setCopilotSessionId] = useState<string | null>(null);
+  const copilotSessionIdRef = useRef<string | null>(copilotSessionId);
+  useEffect(() => { copilotSessionIdRef.current = copilotSessionId; }, [copilotSessionId]);
 
   // Phase 5: Persistence & One-shot overrides
   const isUserOverridden = useRef(false);
@@ -76,7 +83,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     if (!xtermRef.current) return 0;
     const buffer = xtermRef.current.buffer.active;
     const cursorAbs = buffer.baseY + buffer.cursorY;
-    
+
     for (let i = cursorAbs; i >= 0; i--) {
       const line = buffer.getLine(i);
       if (line) {
@@ -103,12 +110,12 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     if (remoteBlocks.length > 0) {
       const mappedIndices: [number, number][] = [];
       let lastSearchLine = totalLines - 1;
-      
+
       const reversedBlocks = [...remoteBlocks].reverse();
       for (const block of reversedBlocks) {
         let startLine = -1;
         let endLine = lastSearchLine + 1;
-        
+
         // Try to find the line using our visual command markers first (OSC 133)
         const matchingMarker = visualCommandMarkers.find(m => m.pos === block.startPos);
         if (matchingMarker && matchingMarker.marker && !matchingMarker.marker.isDisposed && matchingMarker.marker.line !== -1) {
@@ -118,30 +125,30 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           // Fallback to text search
           const targetPreview = stripAnsi(block.startPreview).trim();
           const normalizedTarget = targetPreview.replace(/\s+/g, '');
-          
+
           for (let i = lastSearchLine; i >= 0; i--) {
             const rawLine = buffer.getLine(i)?.translateToString(true) || '';
             const cleanLine = stripAnsi(rawLine).trim();
-            
+
             // Fast path: Exact match on single line
             if (cleanLine.includes(targetPreview)) {
               startLine = i;
               lastSearchLine = i - 1;
               break;
             }
-            
+
             // Slow path: Check if the preview spans across this line and the next line(s)
             // Combine up to 3 lines (current and 2 below) to catch wrapped text safely
             const line0 = stripAnsi(buffer.getLine(i)?.translateToString(true) || '');
-            const line1 = i + 1 < buffer.length ? stripAnsi(buffer.getLine(i+1)?.translateToString(true) || '') : '';
-            const line2 = i + 2 < buffer.length ? stripAnsi(buffer.getLine(i+2)?.translateToString(true) || '') : '';
-            
+            const line1 = i + 1 < buffer.length ? stripAnsi(buffer.getLine(i + 1)?.translateToString(true) || '') : '';
+            const line2 = i + 2 < buffer.length ? stripAnsi(buffer.getLine(i + 2)?.translateToString(true) || '') : '';
+
             const combinedClean = (line0 + line1 + line2).replace(/\s+/g, '');
-            
+
             if (combinedClean.includes(normalizedTarget)) {
-                startLine = i;
-                lastSearchLine = i - 1;
-                break;
+              startLine = i;
+              lastSearchLine = i - 1;
+              break;
             }
           }
         }
@@ -172,13 +179,13 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     for (let i = 0; i < totalLines; i++) {
       const lineText = stripAnsi(buffer.getLine(i)?.translateToString(true) || '').trim();
       if (promptRegex.test(lineText)) {
-        indices.push([i, i + 1]); 
+        indices.push([i, i + 1]);
       }
     }
     // Fix dummy ends for regex fallback
     const effectiveEndVal = getEffectiveEnd();
     for (let i = 0; i < indices.length; i++) {
-        indices[i][1] = (i + 1 < indices.length) ? indices[i+1][0] : effectiveEndVal;
+      indices[i][1] = (i + 1 < indices.length) ? indices[i + 1][0] : effectiveEndVal;
     }
     return indices;
   };
@@ -197,7 +204,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
 
   const { ctxStart, ctxEnd } = React.useMemo(() => {
     if (!xtermRef.current) return { ctxStart: 0, ctxEnd: 0 };
-    
+
     let start = 0;
     let end = 0;
 
@@ -235,55 +242,55 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   useEffect(() => {
     if (!xtermRef.current || !showCopilot) {
       decorationsRef.current.forEach(obj => {
-          obj.decoration.dispose();
-          obj.marker.dispose();
+        obj.decoration.dispose();
+        obj.marker.dispose();
       });
       decorationsRef.current = [];
       return;
     }
 
     const xterm = xtermRef.current;
-    
+
     // Clear old decorations and markers
     decorationsRef.current.forEach(obj => {
-        obj.decoration.dispose();
-        obj.marker.dispose();
+      obj.decoration.dispose();
+      obj.marker.dispose();
     });
     decorationsRef.current = [];
 
     const cursorAbsLine = xterm.buffer.active.baseY + xterm.buffer.active.cursorY;
 
     const addHighlight = (lineIdx: number) => {
-        if (lineIdx < 0 || lineIdx >= xterm.buffer.active.length) return;
-        const marker = xterm.registerMarker(lineIdx - cursorAbsLine);
-        if (marker) {
-            const decoration = xterm.registerDecoration({
-                marker,
-                backgroundColor: '#81a1c133', // Subtle blue highlight
-                width: xterm.cols
-            });
-            if (decoration) {
-                decorationsRef.current.push({ decoration, marker });
-            } else {
-                marker.dispose();
-            }
+      if (lineIdx < 0 || lineIdx >= xterm.buffer.active.length) return;
+      const marker = xterm.registerMarker(lineIdx - cursorAbsLine);
+      if (marker) {
+        const decoration = xterm.registerDecoration({
+          marker,
+          backgroundColor: '#81a1c133', // Subtle blue highlight
+          width: xterm.cols
+        });
+        if (decoration) {
+          decorationsRef.current.push({ decoration, marker });
+        } else {
+          marker.dispose();
         }
+      }
     };
 
     if (contextMode === 'RANGE' && blockIndices.length > 0) {
-        const startIndex = Math.max(0, blockIndices.length - contextBlocks);
-        const activeBlocks = blockIndices.slice(startIndex);
-        for (const [start, end] of activeBlocks) {
-            for (let i = start; i < end; i++) {
-                addHighlight(i);
-            }
+      const startIndex = Math.max(0, blockIndices.length - contextBlocks);
+      const activeBlocks = blockIndices.slice(startIndex);
+      for (const [start, end] of activeBlocks) {
+        for (let i = start; i < end; i++) {
+          addHighlight(i);
         }
+      }
     } else {
-        if (ctxStart < ctxEnd) {
-            for (let i = ctxStart; i < ctxEnd; i++) {
-                addHighlight(i);
-            }
+      if (ctxStart < ctxEnd) {
+        for (let i = ctxStart; i < ctxEnd; i++) {
+          addHighlight(i);
         }
+      }
     }
   }, [highlightKey, showCopilot]);
 
@@ -294,7 +301,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
       const currentScroll = xterm.buffer.active.viewportY;
       const target = ctxStart;
       const diff = Math.floor(target - currentScroll);
-      
+
       if (!isNaN(diff) && diff !== 0) {
         xterm.scrollLines(diff);
       }
@@ -311,14 +318,14 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     if (!xtermRef.current || blockIndices.length === 0) return '';
     const startIndex = Math.max(0, blockIndices.length - contextBlocks);
     let slice = blockIndices.slice(startIndex);
-    
+
     if (slice.length > 1) {
       slice = slice.slice(0, -1);
     }
-    
+
     const previews: string[] = [];
     const buffer = xtermRef.current.buffer.active;
-    
+
     for (const [startLine] of slice) {
       const lineText = buffer.getLine(startLine)?.translateToString(true).trim() || '';
       const cleaned = cleanPreview(lineText);
@@ -327,7 +334,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
         previews.push(truncated);
       }
     }
-    
+
     if (previews.length === 0) {
       return cleanPreview(getBlockPreview(contextBlocks));
     } else if (previews.length <= 3) {
@@ -350,9 +357,9 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     return ctxEnd - ctxStart;
   }, [contextMode, contextBlocks, blockIndices, ctxStart, ctxEnd]);
 
-  const contextDetail = contextMode === 'LINES' 
-    ? `${Math.min(contextLines, effectiveEnd)} (${Math.min(100, Math.round((contextLines/(effectiveEnd||1))*100))}%)` 
-    : contextMode === 'SINGLE' 
+  const contextDetail = contextMode === 'LINES'
+    ? `${Math.min(contextLines, effectiveEnd)} (${Math.min(100, Math.round((contextLines / (effectiveEnd || 1)) * 100))}%)`
+    : contextMode === 'SINGLE'
       ? `${contextBlocks} (${actualLineCount}L~): ${cleanPreview(getBlockPreview(contextBlocks))}`
       : `${contextBlocks} (${actualLineCount}L~): ${getCombinedRangePreview()}`;
 
@@ -360,7 +367,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     if (!terminalRef.current) return;
 
     if (xtermRef.current) {
-        xtermRef.current.dispose();
+      xtermRef.current.dispose();
     }
 
     setVisualCommandMarkers([]);
@@ -397,7 +404,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     const fitAddon = new FitAddon();
     xterm.loadAddon(fitAddon);
     xterm.open(terminalRef.current);
-    
+
     xtermRef.current = xterm;
     fitAddonRef.current = fitAddon;
 
@@ -419,7 +426,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           const buffer = xterm.buffer.active;
           const absCursorLine = buffer.baseY + buffer.cursorY;
           let commandLine = absCursorLine;
-          
+
           const now = Date.now();
           if (lastEnterRef.current !== null && (now - lastEnterRef.current.time) < 1000) {
             commandLine = lastEnterRef.current.line;
@@ -434,7 +441,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
               }
             }
           }
-          
+
           const marker = xterm.registerMarker(commandLine - absCursorLine);
           if (marker) {
             setVisualCommandMarkers(prev => {
@@ -458,8 +465,8 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
         const isCancelKey = (e.ctrlKey && e.keyCode === 67) || (e.keyCode === 27); // Ctrl+C or Escape
         const char = e.key.toLowerCase();
 
-        // If Copilot is waiting for an action, intercept Y/N/E/Esc completely
-        if (isCopilotActiveRef.current) {
+        // If Copilot Action Card is waiting for an action in terminal, intercept Y/N/E/Esc completely
+        if (!showCopilotRef.current && isCopilotActiveRef.current) {
           if (char === 'y') {
             e.preventDefault();
             e.stopPropagation();
@@ -480,29 +487,29 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           }
         }
 
-        if (isCancelKey) { 
+        if (isCancelKey) {
           if (xterm.hasSelection() && e.ctrlKey) {
             document.execCommand('copy');
             return false;
           }
-          
-          // Rejection logic: Unify Ctrl+C and Escape to always kill copilot session if active
-          if (showCopilotRef.current || isCopilotActiveRef.current) {
+
+          // Rejection logic: Unify Ctrl+C and Escape to kill copilot session if active in terminal (not in input bar)
+          if (!showCopilotRef.current && isCopilotActiveRef.current) {
             e.preventDefault();
             e.stopPropagation();
             window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
             return false; // Prevent Ctrl+C from going to terminal
           }
         }
-        
+
         if (e.ctrlKey && e.keyCode === 32) {
           e.preventDefault();
           e.stopPropagation();
-          
+
           // If a session is already active (Action Card open), treat Ctrl+Space as a rejection/cancel
           if (isCopilotActiveRef.current) {
-             window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
-             return false;
+            window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
+            return false;
           }
 
           setShowCopilot(prev => !prev);
@@ -536,9 +543,9 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
 
     socket.onopen = () => {
       if (workspaceId) {
-         xterm.write('\r\n\x1b[38;2;163;190;140m[MULTIPLAYER LINK ESTABLISHED]\x1b[0m\r\n');
+        xterm.write('\r\n\x1b[38;2;163;190;140m[MULTIPLAYER LINK ESTABLISHED]\x1b[0m\r\n');
       } else {
-         xterm.write('\r\n\x1b[38;2;136;192;208m[SECURE LINK ESTABLISHED]\x1b[0m\r\n');
+        xterm.write('\r\n\x1b[38;2;136;192;208m[SECURE LINK ESTABLISHED]\x1b[0m\r\n');
       }
       setTimeout(() => fitAddon.fit(), 100);
       xterm.focus();
@@ -560,9 +567,23 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
                 endPos: b[1],
                 startPreview: b[2]
               })));
-              setContextBlocks(1);
             }
-            
+            // Apply persisted context state from server (accumulation)
+            const serverModeMap: Record<number, ContextMode> = { 0: 'RANGE', 1: 'SINGLE', 2: 'LINES' };
+            if (info.context_mode !== undefined) {
+              const m = serverModeMap[info.context_mode] ?? 'RANGE';
+              setContextMode(m);
+              contextModeRef.current = m;
+            }
+            if (info.context_cmd !== undefined) {
+              setContextBlocks(info.context_cmd);
+              contextBlocksRef.current = info.context_cmd;
+            }
+            if (info.context_lines !== undefined) {
+              setContextLines(info.context_lines);
+              contextLinesRef.current = info.context_lines;
+            }
+
             // Only update OS and Prompt from server if we haven't manually overridden them yet
             if (!isUserOverridden.current) {
               if (info.prompt) setMatchedPrompt(info.prompt);
@@ -573,8 +594,9 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           // Phase 5: Trust Mode Auto-Execution (Respects persistent mode OR one-shot override)
           if (payload.type === 'copilot_response_json') {
             const result = payload.data;
+            console.log('Phase 2 Hook: AI Copilot Response Received in Terminal ->', result);
             const effectiveTrust = oneShotTrustRef.current !== null ? oneShotTrustRef.current : trustModeRef.current;
-            
+
             if (effectiveTrust && result.commands && result.commands.length > 0 && result.risk_level !== 'destructive') {
               socketRef.current?.send(JSON.stringify({
                 type: 'copilot_action',
@@ -585,7 +607,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
               // Mark as auto-authorized for UI
               payload.auto_authorized = true;
             }
-            
+
             // Clear one-shot override after response
             oneShotTrustRef.current = null;
           }
@@ -627,11 +649,18 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
 
     const handleExternalCancel = (e: any) => {
       if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({
+        const modeMap: Record<string, number> = { 'RANGE': 0, 'SINGLE': 1, 'LINES': 2 };
+        const cancelMsg = {
           type: 'copilot_action',
           action: 'web_cancel',
-          session_id: copilotSessionId
-        }));
+          session_id: copilotSessionIdRef.current,
+          node_info_json: JSON.stringify({
+            context_mode: modeMap[contextModeRef.current] ?? 0,
+            context_cmd: contextBlocksRef.current,
+            context_lines: contextLinesRef.current
+          })
+        };
+        socketRef.current.send(JSON.stringify(cancelMsg));
         setShowCopilot(false);
         // Delay re-enabling terminal input to prevent key leakage
         setTimeout(() => {
@@ -770,7 +799,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           setMemories([]);
           setInteractionHistory([]);
         }
-        return; 
+        return;
       }
 
       // Group 2: Toggle/Persona commands (State update OR One-shot override)
@@ -797,12 +826,16 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     const loopContext = interactionHistory.length > 0 ? `\n\n[PREVIOUS INTERACTIONS]\n${interactionHistory.join('\n---\n')}` : "";
 
     if (socketRef.current?.readyState === WebSocket.OPEN) {
+      const modeMap: Record<string, number> = { 'RANGE': 0, 'SINGLE': 1, 'LINES': 2 };
       const nodeInfo = {
         id: nodeId,
         os: os,
         prompt: matchedPrompt,
         persona: overridePersona,
-        trust: overrideTrust
+        trust: overrideTrust,
+        context_mode: modeMap[contextModeRef.current] ?? 0,
+        context_cmd: contextBlocksRef.current,
+        context_lines: contextLinesRef.current
       };
 
       const aiPayload = {
@@ -813,18 +846,15 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
         session_id: copilotSessionId
       };
 
-      console.log("[DEBUG] Sending Request to AI Agent:", aiPayload);
-      console.log("[DEBUG] Node Context for AI:", nodeInfo);
-
       socketRef.current.send(JSON.stringify(aiPayload));
 
-      window.dispatchEvent(new CustomEvent('copilot-message', { 
-        detail: { type: 'copilot_question_local', question: currentText, nodeId: nodeId, persona: overridePersona } 
+      window.dispatchEvent(new CustomEvent('copilot-message', {
+        detail: { type: 'copilot_question_local', question: currentText, nodeId: nodeId, persona: overridePersona }
       }));
 
       if (onCopilotRequest) onCopilotRequest(currentText, mode);
     }
-    
+
     setInteractionHistory(prev => [...prev, `Q: ${currentText}`].slice(-5));
     setShowCopilot(false);
     xtermRef.current?.focus();
@@ -857,7 +887,18 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           isVisible={showCopilot}
           onHide={() => {
             if (socketRef.current?.readyState === WebSocket.OPEN) {
-              socketRef.current.send(JSON.stringify({ type: 'copilot_action', action: 'web_cancel' }));
+              const modeMap: Record<string, number> = { 'RANGE': 0, 'SINGLE': 1, 'LINES': 2 };
+              const cancelMsg = {
+                type: 'copilot_action',
+                action: 'web_cancel',
+                session_id: copilotSessionIdRef.current,
+                node_info_json: JSON.stringify({
+                  context_mode: modeMap[contextModeRef.current] ?? 0,
+                  context_cmd: contextBlocksRef.current,
+                  context_lines: contextLinesRef.current
+                })
+              };
+              socketRef.current.send(JSON.stringify(cancelMsg));
             }
             if (onAbort) onAbort();
             setShowCopilot(false);
