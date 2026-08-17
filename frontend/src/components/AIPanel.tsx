@@ -2,10 +2,10 @@ import React, { useRef, useState, useEffect } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { clsx } from 'clsx';
-import { Cpu, X, Zap, Send, Square, RotateCcw, Check, Ban, Activity, ChevronDown, ChevronUp, Bot, User, Settings, Globe, Terminal as TerminalIcon, Play, Edit, CheckSquare, List } from 'lucide-react';
+import { Cpu, X, Zap, Send, Square, RotateCcw, Check, Ban, Activity, ChevronDown, ChevronUp, Bot, User, Settings, Globe, Terminal as TerminalIcon, Play, Edit, CheckSquare, List, Loader2 } from 'lucide-react';
 import { SmartText } from './SmartText';
 import { api } from '../api';
-import type { AiThought } from '../types';
+import type { AiThought, CopilotMissionState } from '../types';
 
 // --- SUB-COMPONENTS FOR PHASE 5 ---
 
@@ -59,9 +59,9 @@ function CopilotActionCard({ thought, onRun, onRunCustom, onCancel, onEdit, isLa
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isLatest, thought.status, selectedIndices, commands]);
 
-  const toggleIndex = (idx: number) => {
+  const toggleIndex = (index: number) => {
     setSelectedIndices(prev => 
-      prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index].sort((a, b) => a - b)
     );
   };
 
@@ -93,16 +93,30 @@ function CopilotActionCard({ thought, onRun, onRunCustom, onCancel, onEdit, isLa
   };
 
   if (thought.status) {
+    if (thought.status === 'executing') {
+      return (
+        <div className="rounded-xl border p-4 flex items-center justify-between bg-[#81a1c1]/10 border-[#81a1c1]/30 animate-pulse">
+          <div className="flex items-center gap-3">
+            <Loader2 size={16} className="text-[#81a1c1] animate-spin" />
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#81a1c1]">
+              Executing on Router & Waiting for Prompt...
+            </span>
+          </div>
+          <span className="text-[9px] font-mono text-[#d8dee9]/60">{commands.length} Commands</span>
+        </div>
+      );
+    }
+
     const isSuccess = thought.status === 'authorized';
     return (
       <div className={clsx(
-        "rounded-xl border p-4 flex items-center justify-between opacity-60 grayscale-[0.5]",
-        isSuccess ? "bg-[#a3be8c]/10 border-[#a3be8c]/20" : "bg-[#bf616a]/10 border-[#bf616a]/20"
+        "rounded-xl border p-4 flex items-center justify-between opacity-75",
+        isSuccess ? "bg-[#a3be8c]/10 border-[#a3be8c]/30" : "bg-[#bf616a]/10 border-[#bf616a]/30"
       )}>
         <div className="flex items-center gap-3">
           {isSuccess ? <Check size={16} className="text-[#a3be8c]" /> : <Ban size={16} className="text-[#bf616a]" />}
           <span className={clsx("text-[10px] font-black uppercase tracking-[0.2em]", isSuccess ? "text-[#a3be8c]" : "text-[#bf616a]")}>
-            {isSuccess ? "Mission Executed" : "Mission Aborted"}
+            {isSuccess ? "Executed (Prompt Settled)" : "Action Aborted"}
           </span>
         </div>
         <span className="text-[9px] font-mono text-[#d8dee9]/40">{commands.length} Commands</span>
@@ -284,6 +298,7 @@ interface AIPanelProps {
   availableNodes: string[];
   activeTab: 'global' | 'terminal';
   activeNodeId?: string;
+  missionState?: CopilotMissionState | null;
   onTabChange: (tab: 'global' | 'terminal') => void;
   onSendPrompt: (input: string, sessionId: string, displayText?: string) => boolean;
   onSendConfirmation: (thoughtId: string, answer: string) => void;
@@ -296,15 +311,17 @@ interface AIPanelProps {
   onOpenNode: (node: string) => void;
   onOpenTopology: (content: string) => void;
   onConnpyLink: (url: string) => void;
+  onAbortMission?: () => void;
   width?: number;
   onWidthChange?: (w: number) => void;
 }
 
 export default function AIPanel({
   thoughts, isAiProcessing, workspaceId, availableNodes,
-  activeTab, activeNodeId, onTabChange,
+  activeTab, activeNodeId, missionState, onTabChange,
   onSendPrompt, onSendConfirmation, onAbort, onClearThoughts, onNewSession, onToggleThought, onClose,
   onOpenInspect, onOpenNode, onOpenTopology, onConnpyLink,
+  onAbortMission,
   width, onWidthChange
 }: AIPanelProps) {
   const [aiInput, setAiInput] = useState('');
@@ -325,29 +342,32 @@ export default function AIPanel({
   }, [thoughts, isAiProcessing, activeTab]);
 
   const handleActionRun = (thoughtId: string, commands: string[]) => {
+    console.log('▶️ [AIPanel] handleActionRun clicked:', { thoughtId, commands, activeNodeId });
     if (activeNodeId) {
       window.dispatchEvent(new CustomEvent('copilot-run-commands', { 
         detail: { nodeId: activeNodeId, commands } 
       }));
-      onSendConfirmation(thoughtId, 'y'); // Transition to static state
+      onSendConfirmation(thoughtId, 'executing');
     }
   };
 
   const handleActionRunCustom = (thoughtId: string, commands: string[]) => {
+    console.log('▶️ [AIPanel] handleActionRunCustom clicked:', { thoughtId, commands, activeNodeId });
     if (activeNodeId) {
       window.dispatchEvent(new CustomEvent('copilot-custom-run-commands', { 
         detail: { nodeId: activeNodeId, commands } 
       }));
-      onSendConfirmation(thoughtId, 'y'); // Transition to static state
+      onSendConfirmation(thoughtId, 'executing');
     }
   };
 
   const handleActionCancel = (thoughtId: string) => {
+    console.log('⏹️ [AIPanel] handleActionCancel clicked:', { thoughtId, activeNodeId });
     if (activeNodeId) {
-      window.dispatchEvent(new CustomEvent('copilot-external-cancel', { 
+      window.dispatchEvent(new CustomEvent('copilot-action-reject', { 
         detail: { nodeId: activeNodeId } 
       }));
-      onSendConfirmation(thoughtId, 'n'); // Transition to static state
+      onSendConfirmation(thoughtId, 'denied');
     }
   };
 
@@ -560,20 +580,62 @@ export default function AIPanel({
         {/* Sticky Header for Terminal Tab */}
         {activeTab === 'terminal' && activeNodeId && (
           <div className="shrink-0 px-8 py-4 bg-[#2e3440] border-b border-[#3b4252] shadow-sm space-y-3 z-10">
-            <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-[#81a1c1]/10 border border-[#81a1c1]/30">
-              <TerminalIcon size={14} className="text-[#81a1c1]" />
-              <div className="flex flex-col">
-                <span className="text-[9px] font-black uppercase tracking-[0.2em] text-[#81a1c1]/70">Active Context</span>
-                <span className="text-xs font-mono font-bold text-[#81a1c1]">{activeNodeId}</span>
+            {missionState?.active ? (
+              <div className="p-4 rounded-xl bg-[#2e3440] border border-[#a3be8c]/40 shadow-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🎯</span>
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#a3be8c]">
+                      Autonomous Mission
+                    </span>
+                  </div>
+                  <div className="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border bg-[#a3be8c]/20 border-[#a3be8c]/40 text-[#a3be8c] animate-pulse">
+                    STEP {missionState.step}/{missionState.maxSteps}
+                  </div>
+                </div>
+
+                <div className="text-xs font-mono font-bold text-[#eceff4] bg-black/20 p-2.5 rounded-lg border border-[#434c5e]">
+                  {missionState.goal}
+                </div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-[#3b4252] h-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-[#a3be8c] h-full transition-all duration-500" 
+                    style={{ width: `${Math.min(100, (missionState.step / missionState.maxSteps) * 100)}%` }} 
+                  />
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    onClick={() => onAbortMission ? onAbortMission() : onAbort()}
+                    className="w-full bg-[#bf616a]/15 hover:bg-[#bf616a]/25 border border-[#bf616a]/30 text-[#bf616a] text-[10px] font-black py-2 rounded-lg uppercase tracking-wider transition-all flex items-center justify-center gap-2 group"
+                  >
+                    <Square size={12} className="fill-current group-hover:scale-110 transition-transform" />
+                    ABORT MISSION
+                  </button>
+                </div>
               </div>
-            </div>
-            <button
-              onClick={onAbort}
-              className="w-full bg-[#bf616a]/10 hover:bg-[#bf616a]/20 border border-[#bf616a]/20 text-[#bf616a] text-[10px] font-black py-2.5 rounded-lg uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 group"
-            >
-              <Square size={12} className="fill-current group-hover:scale-110 transition-transform" />
-              TERMINATE MISSION
-            </button>
+            ) : missionState?.status === 'completed' ? (
+              <div className="p-3.5 rounded-xl bg-[#a3be8c]/10 border border-[#a3be8c]/30 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <Check size={16} className="text-[#a3be8c]" />
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[#a3be8c]">Mission Completed</div>
+                    <div className="text-[11px] font-mono text-[#d8dee9]/80 truncate max-w-[200px]">{missionState.goal}</div>
+                  </div>
+                </div>
+                <span className="text-[9px] font-mono text-[#a3be8c] font-bold">{missionState.step} STEPS</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-[#81a1c1]/10 border border-[#81a1c1]/30">
+                <TerminalIcon size={14} className="text-[#81a1c1]" />
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-black uppercase tracking-[0.2em] text-[#81a1c1]/70">Active Context</span>
+                  <span className="text-xs font-mono font-bold text-[#81a1c1]">{activeNodeId}</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -5,12 +5,14 @@ import '@xterm/xterm/css/xterm.css';
 import { api } from '../api';
 import CopilotPhantomInput from './CopilotPhantomInput';
 import type { ContextMode, Persona } from './CopilotPhantomInput';
+import type { CopilotMissionState } from '../types';
 
 interface TerminalProps {
   nodeId: string;
   isActive: boolean;
   isAiProcessing?: boolean;
   workspaceId?: string | null;
+  missionState?: CopilotMissionState | null;
   onCopilotRequest?: (text: string, mode: ContextMode) => void;
   onAbort?: () => void;
 }
@@ -19,7 +21,7 @@ const stripAnsi = (str: string) => {
   return str.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
 };
 
-const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = null, onCopilotRequest, onAbort }) => {
+const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = null, missionState, onCopilotRequest, onAbort }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -43,12 +45,22 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   const lastEnterRef = useRef<{ line: number, time: number } | null>(null);
 
   const [persona, setPersona] = useState<Persona>('engineer');
+  const personaRef = useRef(persona);
+  useEffect(() => { personaRef.current = persona; }, [persona]);
+
   const [trustMode, setTrustMode] = useState(false);
   const trustModeRef = useRef(trustMode);
   useEffect(() => { trustModeRef.current = trustMode; }, [trustMode]);
 
   const [os, setOs] = useState('linux');
+  const osRef = useRef(os);
+  useEffect(() => { osRef.current = os; }, [os]);
+
   const [matchedPrompt, setMatchedPrompt] = useState('>$|#$|\\$$|>.$|#.$|\\$.$');
+  const matchedPromptRef = useRef(matchedPrompt);
+  useEffect(() => { matchedPromptRef.current = matchedPrompt; }, [matchedPrompt]);
+
+  const getCapturedContextRef = useRef<() => string>(() => '');
   const [contextLines, setContextLines] = useState(50);
   const contextLinesRef = useRef(contextLines);
   useEffect(() => { contextLinesRef.current = contextLines; }, [contextLines]);
@@ -57,6 +69,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   const contextBlocksRef = useRef(contextBlocks);
   useEffect(() => { contextBlocksRef.current = contextBlocks; }, [contextBlocks]);
   const [remoteBlocks, setRemoteBlocks] = useState<{ startPos: number, endPos: number, startPreview: string }[]>([]);
+  const remoteBlocksRef = useRef<{ startPos: number, endPos: number, startPreview: string }[]>([]);
   const [memories, setMemories] = useState<string[]>([]);
   const [interactionHistory, setInteractionHistory] = useState<string[]>([]);
   const [copilotSessionId, setCopilotSessionId] = useState<string | null>(null);
@@ -66,6 +79,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
   // Phase 5: Persistence & One-shot overrides
   const isUserOverridden = useRef(false);
   const oneShotTrustRef = useRef<boolean | null>(null);
+  const missionStartBlockRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (nodeId && !nodeId.includes(':') && !isUserOverridden.current) {
@@ -107,11 +121,12 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     }
 
     // 1. If we have remote blocks from the server, map them to line ranges
-    if (remoteBlocks.length > 0) {
+    const blocksToUse = remoteBlocksRef.current.length > 0 ? remoteBlocksRef.current : remoteBlocks;
+    if (blocksToUse.length > 0) {
       const mappedIndices: [number, number][] = [];
       let lastSearchLine = totalLines - 1;
 
-      const reversedBlocks = [...remoteBlocks].reverse();
+      const reversedBlocks = [...blocksToUse].reverse();
       for (const block of reversedBlocks) {
         let startLine = -1;
         let endLine = lastSearchLine + 1;
@@ -476,7 +491,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           if (char === 'n' || e.keyCode === 27) { // N or Escape
             e.preventDefault();
             e.stopPropagation();
-            window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
+            window.dispatchEvent(new CustomEvent('copilot-action-reject', { detail: { nodeId } }));
             return false;
           }
           if (char === 'e') {
@@ -506,13 +521,27 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           e.preventDefault();
           e.stopPropagation();
 
-          // If a session is already active (Action Card open), treat Ctrl+Space as a rejection/cancel
-          if (isCopilotActiveRef.current) {
-            window.dispatchEvent(new CustomEvent('copilot-external-cancel', { detail: { nodeId } }));
-            return false;
+          if (showCopilotRef.current) {
+            // Close copilot
+            const cancelMsg = {
+              type: 'copilot_action',
+              action: 'web_cancel',
+              session_id: copilotSessionIdRef.current
+            };
+            socketRef.current?.send(JSON.stringify(cancelMsg));
+            setShowCopilot(false);
+            setTimeout(() => {
+              setIsCopilotActive(false);
+              xterm.focus();
+            }, 50);
+          } else {
+            // Open copilot: notify server PTY to start copilot interaction
+            if (socketRef.current?.readyState === WebSocket.OPEN) {
+              socketRef.current.send(new Uint8Array([0]));
+            }
+            setShowCopilot(true);
+            setIsCopilotActive(true);
           }
-
-          setShowCopilot(prev => !prev);
           return false;
         }
 
@@ -556,17 +585,20 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
         try {
           const payload = JSON.parse(event.data);
           if (payload.type === 'copilot_prompt') {
+            console.log('📩 [Terminal WS] copilot_prompt received from router:', payload);
             setIsCopilotActive(true);
             const info = payload.node_info;
             if (info.session_id) {
               setCopilotSessionId(info.session_id);
             }
             if (info.context_blocks) {
-              setRemoteBlocks(info.context_blocks.map((b: any) => ({
+              const mapped = info.context_blocks.map((b: any) => ({
                 startPos: b[0],
                 endPos: b[1],
                 startPreview: b[2]
-              })));
+              }));
+              setRemoteBlocks(mapped);
+              remoteBlocksRef.current = mapped;
             }
             // Apply persisted context state from server (accumulation)
             const serverModeMap: Record<number, ContextMode> = { 0: 'RANGE', 1: 'SINGLE', 2: 'LINES' };
@@ -594,14 +626,15 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           // Phase 5: Trust Mode Auto-Execution (Respects persistent mode OR one-shot override)
           if (payload.type === 'copilot_response_json') {
             const result = payload.data;
-            console.log('Phase 2 Hook: AI Copilot Response Received in Terminal ->', result);
+            console.log('📩 [Terminal WS] copilot_response_json received:', result);
             const effectiveTrust = oneShotTrustRef.current !== null ? oneShotTrustRef.current : trustModeRef.current;
 
             if (effectiveTrust && result.commands && result.commands.length > 0 && result.risk_level !== 'destructive') {
+              console.log('⚡ [Terminal WS] Trust Mode Auto-Executing commands:', result.commands);
               socketRef.current?.send(JSON.stringify({
                 type: 'copilot_action',
                 action: 'send_all',
-                session_id: copilotSessionId
+                session_id: copilotSessionIdRef.current
               }));
               setIsCopilotActive(false);
               // Mark as auto-authorized for UI
@@ -672,56 +705,165 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     window.addEventListener('copilot-external-cancel', handleExternalCancel);
 
     const handleRunCommands = (e: any) => {
+      console.log('⚡ [Terminal] handleRunCommands received for node:', nodeId, e.detail);
       if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
         socketRef.current.send(JSON.stringify({
           type: 'copilot_action',
           action: 'send_all',
-          session_id: copilotSessionId
+          session_id: copilotSessionIdRef.current
         }));
-        // Delay re-enabling terminal input to prevent key leakage
-        setTimeout(() => {
-          setIsCopilotActive(false);
-          xterm.focus();
-        }, 50);
+        setIsCopilotActive(true);
+        xterm.focus();
       }
     };
     window.addEventListener('copilot-run-commands', handleRunCommands);
 
     const handleCustomRunCommands = (e: any) => {
+      console.log('⚡ [Terminal] handleCustomRunCommands received for node:', nodeId, e.detail);
       if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
         const commands = e.detail.commands;
         const commandsStr = Array.isArray(commands) ? commands.join('\n') : commands;
         socketRef.current.send(JSON.stringify({
           type: 'copilot_action',
           action: `custom:${commandsStr}`,
-          session_id: copilotSessionId
+          session_id: copilotSessionIdRef.current
         }));
-        // Delay re-enabling terminal input to prevent key leakage
-        setTimeout(() => {
-          setIsCopilotActive(false);
-          xterm.focus();
-        }, 50);
+        setIsCopilotActive(true);
+        xterm.focus();
       }
     };
     window.addEventListener('copilot-custom-run-commands', handleCustomRunCommands);
 
     const handleContinueLoop = (e: any) => {
+      console.log('🔄 [Terminal] handleContinueLoop received for node:', nodeId);
       if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
         socketRef.current.send(JSON.stringify({
           type: 'copilot_action',
           action: 'continue',
-          session_id: copilotSessionId
+          session_id: copilotSessionIdRef.current
         }));
         setShowCopilot(true);
+        setIsCopilotActive(true);
       }
     };
     window.addEventListener('copilot-continue-loop', handleContinueLoop);
+
+    const handleActionReject = (e: any) => {
+      console.log('🛑 [Terminal] handleActionReject received for node:', nodeId);
+      if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'copilot_action',
+          action: 'continue',
+          session_id: copilotSessionIdRef.current
+        }));
+        setShowCopilot(true);
+        setIsCopilotActive(true);
+      }
+    };
+    window.addEventListener('copilot-action-reject', handleActionReject);
+
+    const handleTriggerMissionStep = (e: any) => {
+      console.log('🎯 [Terminal] handleTriggerMissionStep received:', e.detail);
+      if (e.detail.nodeId === nodeId && socketRef.current?.readyState === WebSocket.OPEN) {
+        setShowCopilot(false);
+        setIsCopilotActive(true);
+        const { step, maxSteps, goal, notes, feedback } = e.detail;
+
+        const allBlocks = getBlockIndices();
+        const totalCmds = allBlocks.length || remoteBlocksRef.current.length;
+        const startIdx = missionStartBlockRef.current ?? (totalCmds > 1 ? Math.max(0, totalCmds - (step * 2)) : 0);
+        const missionBlocks = Math.max(1, (totalCmds - startIdx) + 1);
+        const blocksCount = Math.max(contextBlocksRef.current, missionBlocks);
+
+        setContextBlocks(blocksCount);
+        contextBlocksRef.current = blocksCount;
+        setContextMode('RANGE');
+        contextModeRef.current = 'RANGE';
+
+        let captured = "";
+        if (xtermRef.current) {
+          const buffer = xtermRef.current.buffer.active;
+          const lines: string[] = [];
+          if (allBlocks.length > 0) {
+            const startIndex = Math.max(0, allBlocks.length - blocksCount);
+            const activeBlocks = allBlocks.slice(startIndex);
+            for (const [s, end] of activeBlocks) {
+              for (let i = s; i < end; i++) {
+                const line = buffer.getLine(i);
+                if (line) lines.push(line.translateToString(true));
+              }
+            }
+          }
+          const joined = lines.join('\n').trim();
+          if (joined.split('\n').length < 3) {
+            // Safety fallback: grab last 150 lines from active buffer
+            const total = buffer.length;
+            const s = Math.max(0, total - 150);
+            const fallbackLines: string[] = [];
+            for (let i = s; i < total; i++) {
+              const line = buffer.getLine(i);
+              if (line) fallbackLines.push(line.translateToString(true));
+            }
+            captured = fallbackLines.join('\n').trim();
+          } else {
+            captured = joined;
+          }
+        }
+
+        const nodeInfo = {
+          id: nodeId,
+          os: osRef.current,
+          prompt: matchedPromptRef.current,
+          persona: personaRef.current,
+          trust: trustModeRef.current,
+          context_mode: 0, // RANGE
+          context_cmd: blocksCount,
+          context_lines: contextLinesRef.current,
+          mission: { active: true, step, goal }
+        };
+
+        const missionPrompt = `[AUTONOMOUS MISSION: "${goal}"]\n[MISSION STEP: ${step}/${maxSteps || 10}]${feedback ? `\n[OPERATOR FEEDBACK / GUIDANCE]: ${feedback}` : ''}\n[INTERNAL MISSION SCRATCHPAD / PREVIOUS FINDINGS]:\n${(notes || []).join('\n')}`;
+
+        const aiPayload = {
+          type: 'copilot_question',
+          question: missionPrompt,
+          context_buffer: captured,
+          node_info_json: JSON.stringify(nodeInfo),
+          session_id: copilotSessionIdRef.current
+        };
+
+        console.log(`📡 [Terminal] Dispatching Step ${step} payload to WebSocket:`, aiPayload);
+        socketRef.current.send(JSON.stringify(aiPayload));
+
+        window.dispatchEvent(new CustomEvent('copilot-message', {
+          detail: { 
+            type: 'copilot_question_local', 
+            question: `[Mission Step ${step}/${maxSteps || 10}] ${goal}`, 
+            nodeId: nodeId, 
+            persona: personaRef.current 
+          }
+        }));
+      }
+    };
+    window.addEventListener('copilot-trigger-mission-step', handleTriggerMissionStep);
+
+    const handlePromptSettled = (e: any) => {
+      console.log('✨ [Terminal] handlePromptSettled received (opening phantom input):', e.detail);
+      if (e.detail.nodeId === nodeId) {
+        setIsCopilotActive(true);
+        setShowCopilot(true);
+      }
+    };
+    window.addEventListener('copilot-prompt-settled', handlePromptSettled);
 
     return () => {
       window.removeEventListener('copilot-external-cancel', handleExternalCancel);
       window.removeEventListener('copilot-run-commands', handleRunCommands);
       window.removeEventListener('copilot-custom-run-commands', handleCustomRunCommands);
       window.removeEventListener('copilot-continue-loop', handleContinueLoop);
+      window.removeEventListener('copilot-action-reject', handleActionReject);
+      window.removeEventListener('copilot-trigger-mission-step', handleTriggerMissionStep);
+      window.removeEventListener('copilot-prompt-settled', handlePromptSettled);
       keyDisposable.dispose();
       clearTimeout(fitTimer);
       resizeObserver.disconnect();
@@ -767,8 +909,10 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
         }
       }
     }
-    return lines.join('\n').trim();
+    const res = lines.join('\n').trim();
+    return res;
   };
+  getCapturedContextRef.current = getCapturedContext;
 
   const handleCopilotSubmit = (text: string, mode: ContextMode) => {
     xtermRef.current?.scrollToBottom();
@@ -790,6 +934,13 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
       const args = parts.slice(1).join(' ').trim();
       const hasArgs = args.length > 0;
 
+      if (cmd === '/mission') {
+        const allB = getBlockIndices();
+        missionStartBlockRef.current = allB.length;
+      } else if (cmd === '/cancel' || cmd === '/abort') {
+        missionStartBlockRef.current = null;
+      }
+
       // Group 1: State-only commands (Always update and return)
       if (['/os', '/prompt', '/memorize', '/clear'].includes(cmd)) {
         if (cmd === '/os' && hasArgs) { setOs(args); isUserOverridden.current = true; }
@@ -805,7 +956,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
       // Group 2: Toggle/Persona commands (State update OR One-shot override)
       if (['/trust', '/untrust', '/architect', '/engineer'].includes(cmd)) {
         if (!hasArgs) {
-          // Standalone: Update persistent state and return
+          // Toggle/Set state persistently
           if (cmd === '/trust') setTrustMode(true);
           else if (cmd === '/untrust') setTrustMode(false);
           else if (cmd === '/architect') setPersona('architect');
@@ -843,7 +994,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
         question: `${currentText}${memoryContext}${loopContext}`,
         context_buffer: capturedContext,
         node_info_json: JSON.stringify(nodeInfo),
-        session_id: copilotSessionId
+        session_id: copilotSessionIdRef.current
       };
 
       socketRef.current.send(JSON.stringify(aiPayload));
@@ -859,12 +1010,6 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
     setShowCopilot(false);
     xtermRef.current?.focus();
   };
-
-  useEffect(() => {
-    if (showCopilot && socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(new Uint8Array([0]));
-    }
-  }, [showCopilot]);
 
   const handleAdjustContext = (up: boolean) => {
     if (contextMode === 'LINES') {
@@ -915,6 +1060,7 @@ const Terminal: React.FC<TerminalProps> = ({ nodeId, isActive, workspaceId = nul
           matchedPrompt={matchedPrompt}
           contextDetail={contextDetail}
           memoryCount={memories.length}
+          missionState={missionState}
         />
       </div>
     </div>

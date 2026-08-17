@@ -54,7 +54,19 @@ function App() {
 
   // --- Hooks ---
   const { workspaceId, socketRef: workspaceSocketRef, updateTabsAndPush, toggleWorkspace } = useWorkspace(tabs, setTabs);
-  const { thoughts, isAiProcessing, setThoughts, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought, startNewSession } = useAISession(workspaceId, sessionToken);
+  const { 
+    thoughts, 
+    isAiProcessing, 
+    setThoughts, 
+    sendPrompt, 
+    sendConfirmation, 
+    abort, 
+    clearThoughts, 
+    toggleThought, 
+    startNewSession,
+    missionState,
+    abortMission
+  } = useAISession(workspaceId, sessionToken);
 
   // Auto-scroll AI panel
   useEffect(() => {
@@ -250,16 +262,24 @@ function App() {
       }
     };
 
+    const handleCopilotActionReject = (e: any) => {
+      const nodeId = e.detail?.nodeId;
+      console.log('🛑 [App] copilot-action-reject received, setting pending card status to denied for node:', nodeId);
+      sendConfirmation('', 'denied');
+    };
+
     window.addEventListener('copilot-message', handleCopilotMessage);
     window.addEventListener('copilot-run-commands', handleCopilotAction);
     window.addEventListener('copilot-custom-run-commands', handleCopilotAction);
     window.addEventListener('copilot-external-cancel', handleCopilotAction);
+    window.addEventListener('copilot-action-reject', handleCopilotActionReject);
 
     return () => {
       window.removeEventListener('copilot-message', handleCopilotMessage);
       window.removeEventListener('copilot-run-commands', handleCopilotAction);
       window.removeEventListener('copilot-custom-run-commands', handleCopilotAction);
       window.removeEventListener('copilot-external-cancel', handleCopilotAction);
+      window.removeEventListener('copilot-action-reject', handleCopilotActionReject);
     };
   }, [thoughts, sendConfirmation]);
 
@@ -850,6 +870,7 @@ function App() {
                       isActive={activeTabId === tab.id} 
                       isAiProcessing={isAiProcessing}
                       workspaceId={workspaceId}
+                      missionState={missionState?.nodeId === tab.nodeId ? missionState : null}
                       onCopilotRequest={handleCopilotRequest}
                       onAbort={handleAbort}
                     />
@@ -867,6 +888,7 @@ function App() {
               isConnected={true}
               workspaceId={workspaceId}
               activeNodeId={activeTab?.type === 'terminal' ? activeTab.nodeId : undefined}
+              missionState={missionState?.nodeId === activeTab?.nodeId ? missionState : null}
               availableNodes={availableNodes}
               activeTab={activeAiTab}
               onTabChange={setActiveAiTab}
@@ -881,6 +903,7 @@ function App() {
               onOpenNode={handleOpenNode}
               onOpenTopology={handleOpenTopology}
               onConnpyLink={handleConnpyLink}
+              onAbortMission={abortMission}
               width={aiPanelWidth}
               onWidthChange={setAiPanelWidth}
             />

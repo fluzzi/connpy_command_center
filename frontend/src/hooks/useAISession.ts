@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { api } from '../api';
-import type { AiThought } from '../types';
+import type { AiThought, CopilotMissionState } from '../types';
 
 export function cleanAiText(text: string): string {
   if (!text) return '';
@@ -14,6 +14,10 @@ export function cleanAiText(text: string): string {
 export function useAISession(workspaceId: string | null, sessionToken: string | null = null) {
   const [thoughts, setThoughts] = useState<AiThought[]>([]);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
+  const [missionState, setMissionState] = useState<CopilotMissionState | null>(null);
+  const missionStateRef = useRef<CopilotMissionState | null>(null);
+  missionStateRef.current = missionState;
+
   const currentResponderRef = useRef<'engineer' | 'architect'>('engineer');
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -45,20 +49,64 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
         if (payload.persona === 'architect' || payload.persona === 'engineer') {
           currentResponderRef.current = payload.persona;
         }
-        setThoughts(prev => [...prev, { 
-          id: Math.random().toString(36), 
-          type: 'text', 
-          content: payload.question, 
-          timestamp: new Date(), 
-          nodeId 
-        }]);
+
+        const q = (payload.question || '').trim();
+        if (q.startsWith('/mission')) {
+          const goal = q.replace(/^\/mission\s*/, '').trim() || 'General investigation';
+          const newMission: CopilotMissionState = {
+            active: true,
+            goal,
+            step: 1,
+            maxSteps: 10,
+            scratchpadNotes: [],
+            nodeId,
+            status: 'running'
+          };
+          setMissionState(newMission);
+          missionStateRef.current = newMission;
+        } else if (q === '/cancel' || q === '/abort') {
+          if (missionStateRef.current?.active) {
+            const aborted = { ...missionStateRef.current, active: false, status: 'aborted' as const };
+            setMissionState(aborted);
+            missionStateRef.current = aborted;
+          }
+        }
+
+        setThoughts(prev => [
+          ...prev.map(t => (t.nodeId === nodeId && t.type === 'confirm' && !t.status) ? { ...t, requires_confirmation: false, status: 'denied' as const } : t),
+          { 
+            id: Math.random().toString(36), 
+            type: 'text', 
+            content: payload.question, 
+            timestamp: new Date(), 
+            nodeId 
+          }
+        ]);
       } else if (payload.type === 'copilot_response_json') {
         setIsAiProcessing(false);
         const result = payload.data;
         console.log('Phase 2 Hook: AI Copilot Response Received ->', result);
         
-        // If no commands, notify terminal to "continue" and reopen input
         const hasCommands = result.commands && result.commands.length > 0;
+        const currentMission = missionStateRef.current;
+
+        if (currentMission?.active) {
+          if (result.notes) {
+            currentMission.scratchpadNotes.push(result.notes);
+          }
+          if (hasCommands) {
+            const updatedMission = { ...currentMission, status: 'waiting_approval' as const };
+            setMissionState(updatedMission);
+            missionStateRef.current = updatedMission;
+          } else {
+            // Mission completed because AI has no further commands
+            const completedMission = { ...currentMission, active: false, status: 'completed' as const };
+            setMissionState(completedMission);
+            missionStateRef.current = completedMission;
+          }
+        }
+
+        // If no commands, notify terminal to "continue" and reopen input
         if (!hasCommands) {
             window.dispatchEvent(new CustomEvent('copilot-continue-loop', { 
                 detail: { nodeId: nodeId } 
@@ -110,7 +158,7 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
           if (hasCommands) {
             newThoughts.push({ 
               id: Math.random().toString(36), 
-              type: 'confirm',
+              type: 'confirm', 
               content: JSON.stringify({ ...result, guide: undefined }),
               timestamp: new Date(),
               status: payload.auto_authorized ? 'authorized' : undefined,
@@ -121,6 +169,53 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
         });
       } else if (payload.type === 'copilot_prompt') {
          setIsAiProcessing(false);
+         const currentMission = missionStateRef.current;
+         console.log('🤖 [useAISession] copilot_prompt received:', {
+           nodeId,
+           missionActive: currentMission?.active,
+           missionStep: currentMission?.step,
+           missionStatus: currentMission?.status,
+           payload
+         });
+
+         // Mark executing thoughts as authorized when prompt settles
+         setThoughts(prev => prev.map(t => (t.nodeId === nodeId && t.status === 'executing') ? { ...t, status: 'authorized' } : t));
+
+         if (currentMission?.active && currentMission.status !== 'aborted') {
+           if (currentMission.step < currentMission.maxSteps) {
+             const nextStep = currentMission.step + 1;
+             const updatedMission = { ...currentMission, step: nextStep, status: 'running' as const };
+             setMissionState(updatedMission);
+             missionStateRef.current = updatedMission;
+
+             console.log(`🚀 [useAISession] Advancing Autonomous Mission to Step ${nextStep}/${currentMission.maxSteps}`);
+
+             // Dispatch next step trigger to Terminal
+             window.dispatchEvent(new CustomEvent('copilot-trigger-mission-step', {
+               detail: {
+                 nodeId,
+                 step: nextStep,
+                 maxSteps: currentMission.maxSteps,
+                 goal: currentMission.goal,
+                 notes: currentMission.scratchpadNotes
+               }
+             }));
+           } else {
+             console.log('🏁 [useAISession] Mission completed (max steps reached)');
+             const completedMission = { ...currentMission, active: false, status: 'completed' as const };
+             setMissionState(completedMission);
+             missionStateRef.current = completedMission;
+             window.dispatchEvent(new CustomEvent('copilot-prompt-settled', {
+               detail: { nodeId }
+             }));
+           }
+         } else {
+           console.log('ℹ️ [useAISession] Normal mode prompt settled, notifying terminal');
+           // Normal mode (non-mission): signal terminal that device prompt has settled
+           window.dispatchEvent(new CustomEvent('copilot-prompt-settled', {
+             detail: { nodeId }
+           }));
+         }
       }
     };
 
@@ -275,12 +370,49 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ confirmation_answer: answer }));
     }
-    setThoughts(prev => prev.map(t => t.id === thoughtId ? { ...t, requires_confirmation: false, status: answer === 'y' ? 'authorized' : 'denied' } : t));
+    const statusMap: Record<string, 'authorized' | 'denied' | 'executing'> = {
+      'y': 'authorized',
+      'authorized': 'authorized',
+      'executing': 'executing',
+      'n': 'denied',
+      'denied': 'denied'
+    };
+    const newStatus = statusMap[answer] || (answer === 'y' ? 'authorized' : 'denied');
+    if (newStatus === 'executing') {
+      setMissionState(prev => {
+        if (!prev) return null;
+        const updated = { ...prev, status: 'executing' as const };
+        missionStateRef.current = updated;
+        return updated;
+      });
+    } else if (newStatus === 'denied') {
+      setMissionState(prev => {
+        if (!prev) return null;
+        const updated = { ...prev, status: 'running' as const };
+        missionStateRef.current = updated;
+        return updated;
+      });
+    }
+    setThoughts(prev => prev.map(t => (t.id === thoughtId || (t.type === 'confirm' && !t.status && (answer === 'denied' || answer === 'n'))) ? { ...t, requires_confirmation: false, status: newStatus } : t));
   }, []);
 
   const abort = useCallback(() => {
     setIsAiProcessing(false);
     socketRef.current?.send(JSON.stringify({ interrupt: true }));
+  }, []);
+
+  const abortMission = useCallback(() => {
+    const current = missionStateRef.current;
+    if (current) {
+      const aborted = { ...current, active: false, status: 'aborted' as const };
+      setMissionState(aborted);
+      missionStateRef.current = aborted;
+      if (current.nodeId) {
+        window.dispatchEvent(new CustomEvent('copilot-external-cancel', {
+          detail: { nodeId: current.nodeId }
+        }));
+      }
+    }
   }, []);
 
   const clearThoughts = useCallback(() => setThoughts([]), []);
@@ -296,9 +428,26 @@ export function useAISession(workspaceId: string | null, sessionToken: string | 
     setAiSessionId(newSessionId);
     setThoughts([]);
     setIsAiProcessing(false);
+    setMissionState(null);
+    missionStateRef.current = null;
   }, [workspaceId]);
 
   const isConnected = socketRef.current?.readyState === WebSocket.OPEN;
 
-  return { thoughts, isAiProcessing, isConnected, setThoughts, setIsAiProcessing, sendPrompt, sendConfirmation, abort, clearThoughts, toggleThought, startNewSession };
+  return { 
+    thoughts, 
+    isAiProcessing, 
+    isConnected, 
+    missionState,
+    setThoughts, 
+    setIsAiProcessing, 
+    sendPrompt, 
+    sendConfirmation, 
+    abort, 
+    clearThoughts, 
+    toggleThought, 
+    startNewSession,
+    abortMission
+  };
 }
+

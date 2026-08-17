@@ -15,8 +15,20 @@ export interface AiThought {
   requires_confirmation?: boolean;
   tool_name?: string;
   isExpanded?: boolean;
-  status?: 'authorized' | 'denied';
+  status?: 'authorized' | 'denied' | 'executing';
   risk_level?: string;
   nodeId?: string;
   sessionId?: string;
 }
+
+export interface CopilotMissionState {
+  active: boolean;
+  goal: string;
+  step: number;
+  maxSteps: number;
+  scratchpadNotes: string[];
+  nodeId?: string;
+  startBlockIdx?: number;
+  status?: 'running' | 'waiting_approval' | 'executing' | 'completed' | 'aborted';
+}
+

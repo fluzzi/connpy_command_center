@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Shield, Search, Cpu, Layout, Command, Database } from 'lucide-react';
 import { clsx } from 'clsx';
 
+import type { CopilotMissionState } from '../types';
+
 export type ContextMode = 'LINES' | 'SINGLE' | 'RANGE';
 export type Persona = 'engineer' | 'architect';
 
@@ -18,9 +20,13 @@ interface CopilotPhantomInputProps {
   matchedPrompt: string;
   contextDetail: string;
   memoryCount: number;
+  missionState?: CopilotMissionState | null;
 }
 
 const SLASH_COMMANDS = [
+  { cmd: '/mission', desc: 'Start autonomous multi-step mission' },
+  { cmd: '/cancel', desc: 'Abort active mission' },
+  { cmd: '/abort', desc: 'Abort active mission' },
   { cmd: '/architect', desc: 'Switch to Architect persona' },
   { cmd: '/engineer', desc: 'Switch to Engineer persona' },
   { cmd: '/trust', desc: 'Enable Auto-Run for commands' },
@@ -35,7 +41,7 @@ const DEFAULT_PROMPT = '>$|#$|\\$$|>.$|#.$|\\$.$';
 
 const CopilotPhantomInput: React.FC<CopilotPhantomInputProps> = ({
   isVisible, onHide, onSubmit, onContextModeChange, onAdjustContext, activeContextMode,
-  persona, trustMode, os, matchedPrompt, contextDetail, memoryCount
+  persona, trustMode, os, matchedPrompt, contextDetail, memoryCount, missionState
 }) => {
   const [input, setInput] = useState('');
   const [showAutocomplete, setShowAutocomplete] = useState(false);
@@ -217,6 +223,15 @@ const CopilotPhantomInput: React.FC<CopilotPhantomInputProps> = ({
           >
             <Database size={14} /> Memories: {memoryCount}
           </div>
+
+          {missionState?.active && (
+            <div 
+              style={{ marginRight: '3px', paddingLeft: '4px', paddingRight: '4px' }}
+              className="py-1.5 rounded-md text-[11px] font-black tracking-widest flex items-center gap-2 shrink-0 select-none border transition-all bg-[#a3be8c]/20 border-[#a3be8c]/40 text-[#a3be8c] animate-pulse"
+            >
+              🎯 Mission: Step {missionState.step}/{missionState.maxSteps}
+            </div>
+          )}
 
           {matchedPrompt && matchedPrompt !== DEFAULT_PROMPT && (
             <div 
